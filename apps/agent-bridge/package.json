@@ -1,0 +1,16 @@
+{
+  "name": "@synccaster/agent-bridge",
+  "version": "2.0.0",
+  "type": "module",
+  "bin": {
+    "synccaster-agent-bridge-native": "./dist/native-host.js",
+    "synccaster-agent-bridge-mcp": "./dist/mcp.js"
+  },
+  "scripts": {
+    "build": "pnpm --filter @synccaster/agent-protocol build && tsc -p tsconfig.json",
+    "install:native:linux": "node ./scripts/install-native-host-linux.mjs"
+  },
+  "dependencies": {
+    "@synccaster/agent-protocol": "workspace:*"
+  }
+}

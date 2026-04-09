@@ -4,13 +4,19 @@
  */
 
 import { db, type Job } from '@synccaster/core';
-import { publishToTarget } from './publish-engine';
 import { Logger } from '@synccaster/utils';
 import { startZhihuLearn, fetchZhihuLearnedTemplate } from './learn-recorder';
 import { AccountService } from './account-service';
 import { fetchPlatformUserInfo } from './platform-api';
 import { publishWechatFromMdEditor } from './wechat-md-publish';
-import { resetSyncGroup } from './tab-group-manager';
+import {
+  cancelJob as cancelManagedJob,
+  createJob as createManagedJob,
+  getJobStatus as getManagedJobStatus,
+  processScheduledJobs as processManagedScheduledJobs,
+  startJob as startManagedJob,
+} from './job-service';
+import { initNativeAgentBridge } from './native-agent-bridge';
 
 const logger = new Logger('background');
 
@@ -29,6 +35,7 @@ try {
 
 // 初始化账号服务（监听登录成功消息）
 AccountService.init();
+initNativeAgentBridge();
 
 // 监听扩展安装
 chrome.runtime.onInstalled.addListener(async (details) => {
@@ -65,7 +72,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   logger.info('alarm', `Alarm triggered: ${alarm.name}`);
   
   if (alarm.name === 'check-scheduled-jobs') {
-    await processScheduledJobs();
+    await processManagedScheduledJobs();
   }
 });
 
@@ -219,16 +226,16 @@ async function saveCollectedPost(data: any) {
 async function handleMessage(message: any, sender: chrome.runtime.MessageSender) {
   switch (message.type) {
     case 'CREATE_JOB':
-      return await createJob(message.data);
+      return await createManagedJob(message.data);
     
     case 'START_JOB':
-      return await startJob(message.data.jobId);
+      return await startManagedJob(message.data.jobId);
     
     case 'CANCEL_JOB':
-      return await cancelJob(message.data.jobId);
+      return await cancelManagedJob(message.data.jobId);
     
     case 'GET_JOB_STATUS':
-      return await getJobStatus(message.data.jobId);
+      return await getManagedJobStatus(message.data.jobId);
     
     case 'COLLECT_CONTENT':
       // 请求 content script 采集内容
@@ -514,7 +521,7 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
       // 启动发布任务
       logger.info('publish', 'Starting publish job', { jobId: message.data?.jobId });
       try {
-        await startJob(message.data.jobId);
+        await startManagedJob(message.data.jobId);
         return { success: true };
       } catch (error: any) {
         logger.error('publish', 'Failed to start publish job', { error });
@@ -563,339 +570,28 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
  * 创建发布任务
  */
 async function createJob(data: { postId: string; targets: any[] }) {
-  logger.info('job', `Creating job for post: ${data.postId}`);
-  
-  const job: Job = {
-    id: crypto.randomUUID(),
-    postId: data.postId,
-    targets: data.targets,
-    state: 'PENDING',
-    progress: 0,
-    attempts: 0,
-    maxAttempts: 3,
-    logs: [],
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-  
-  await db.jobs.add(job);
-  logger.info('job', `Job created: ${job.id}`);
-  
-  return { jobId: job.id };
+  return createManagedJob(data);
 }
 
 /**
  * 启动任务
  */
 async function startJob(jobId: string) {
-  logger.info('job', `Starting job: ${jobId}`);
-  
-  const job = await db.jobs.get(jobId);
-  if (!job) {
-    throw new Error(`Job not found: ${jobId}`);
-  }
-  
-  if (job.state !== 'PENDING') {
-    throw new Error(`Job is not in PENDING state: ${job.state}`);
-  }
-  
-  // 更新状态为 RUNNING
-  await db.jobs.update(jobId, {
-    state: 'RUNNING',
-    updatedAt: Date.now(),
-  });
-  
-  // 在后台执行任务
-  executeJob(jobId).catch((error) => {
-    logger.error('job', `Job execution failed: ${jobId}`, { error });
-  });
-  
-  return { success: true };
+  return startManagedJob(jobId);
 }
 
 /**
  * 取消任务
  */
 async function cancelJob(jobId: string) {
-  logger.info('job', `Cancelling job: ${jobId}`);
-  
-  await db.jobs.update(jobId, {
-    state: 'PAUSED',
-    updatedAt: Date.now(),
-  });
-  
-  return { success: true };
+  return cancelManagedJob(jobId);
 }
 
 /**
  * 获取任务状态
  */
 async function getJobStatus(jobId: string) {
-  const job = await db.jobs.get(jobId);
-  if (!job) {
-    throw new Error(`Job not found: ${jobId}`);
-  }
-  
-  return {
-    id: job.id,
-    state: job.state,
-    progress: job.progress,
-    logs: job.logs,
-  };
-}
-
-/**
- * 执行任务
- */
-async function executeJob(jobId: string) {
-  const job = await db.jobs.get(jobId);
-  if (!job) {
-    logger.error('job', `Job not found: ${jobId}`);
-    return;
-  }
-  
-  const post = await db.posts.get(job.postId);
-  if (!post) {
-    logger.error('job', `Post not found: ${job.postId}`);
-    await db.jobs.update(jobId, {
-      state: 'FAILED',
-      error: 'Post not found',
-      updatedAt: Date.now(),
-    });
-    return;
-  }
-  
-  logger.info('job', `Executing job: ${jobId}`, { 
-    targets: job.targets.length,
-    platforms: job.targets.map(t => t.platform).join(', ')
-  });
-  
-  // 重置同步组，开始新的发布批次
-  // 所有发布页面将被归入同一个标签页组中
-  resetSyncGroup();
-  logger.info('job', 'Reset sync group for new publish batch');
-  
-  try {
-    let successCount = 0;
-    let failCount = 0;
-    let unconfirmedCount = 0;
-    const results: NonNullable<Job['results']> = [];
-
-    const total = job.targets.length;
-    const activeTab = total === 1;
-    const concurrency = Math.min(4, Math.max(1, total));
-    let completed = 0;
-
-    const updateProgress = async () => {
-      const progress = Math.round((completed / total) * 100);
-      await db.jobs.update(jobId, { progress, results, updatedAt: Date.now() } as any);
-    };
-
-    const runTarget = async (target: any) => {
-      const startAt = Date.now();
-      logger.info('job', `Publishing to ${target.platform}`, { jobId, target });
-
-      const result = await publishToTarget(jobId, post as any, target as any, { activeTab });
-
-      logger.info('job', `Publish result for ${target.platform}`, {
-        success: result.success,
-        url: result.url,
-        error: result.error,
-        unconfirmed: result?.meta?.unconfirmed,
-      });
-
-      const isUnconfirmed = result?.meta?.unconfirmed === true;
-
-      if (result.success) {
-        successCount++;
-        results.push({
-          platform: target.platform,
-          accountId: target.accountId,
-          status: 'PUBLISHED',
-          url: result.url,
-          updatedAt: Date.now(),
-        });
-        const existing = await db.platformMaps
-          .where('postId')
-          .equals(job.postId)
-          .and((m) => m.platform === target.platform && m.accountId === target.accountId)
-          .first();
-
-        const updates: any = {
-          url: result.url,
-          remoteId: result.remoteId,
-          status: 'PUBLISHED',
-          lastSyncAt: Date.now(),
-          meta: { ...(existing?.meta || {}), lastDurationMs: Date.now() - startAt },
-        };
-
-        if (existing) {
-          await db.platformMaps.update(existing.id, updates);
-        } else {
-          await db.platformMaps.add({
-            id: crypto.randomUUID(),
-            postId: job.postId,
-            platform: target.platform,
-            accountId: target.accountId,
-            ...updates,
-          } as any);
-        }
-      } else if (isUnconfirmed) {
-        unconfirmedCount++;
-        results.push({
-          platform: target.platform,
-          accountId: target.accountId,
-          status: 'UNCONFIRMED',
-          url: result?.meta?.currentUrl || undefined,
-          error: result.error || '未能确认发布成功',
-          updatedAt: Date.now(),
-        });
-        const existing = await db.platformMaps
-          .where('postId')
-          .equals(job.postId)
-          .and((m) => m.platform === target.platform && m.accountId === target.accountId)
-          .first();
-
-        const updates: any = {
-          status: 'DRAFT',
-          lastSyncAt: Date.now(),
-          lastError: result.error || '未能确认发布成功',
-          meta: { ...(existing?.meta || {}), currentUrl: result?.meta?.currentUrl },
-        };
-
-        if (existing) {
-          await db.platformMaps.update(existing.id, updates);
-        } else {
-          await db.platformMaps.add({
-            id: crypto.randomUUID(),
-            postId: job.postId,
-            platform: target.platform,
-            accountId: target.accountId,
-            ...updates,
-          } as any);
-        }
-      } else {
-        failCount++;
-        results.push({
-          platform: target.platform,
-          accountId: target.accountId,
-          status: 'FAILED',
-          error: result.error || 'Unknown error',
-          updatedAt: Date.now(),
-        });
-        const existing = await db.platformMaps
-          .where('postId')
-          .equals(job.postId)
-          .and((m) => m.platform === target.platform && m.accountId === target.accountId)
-          .first();
-
-        const updates: any = {
-          status: 'FAILED',
-          lastSyncAt: Date.now(),
-          lastError: result.error || 'Unknown error',
-        };
-
-        if (existing) {
-          await db.platformMaps.update(existing.id, updates);
-        } else {
-          await db.platformMaps.add({
-            id: crypto.randomUUID(),
-            postId: job.postId,
-            platform: target.platform,
-            accountId: target.accountId,
-            ...updates,
-          } as any);
-        }
-      }
-
-      completed++;
-      await updateProgress();
-    };
-
-    const queue = [...job.targets];
-    const workers = Array.from({ length: concurrency }, async () => {
-      while (queue.length > 0) {
-        const t = queue.shift();
-        if (!t) return;
-        await runTarget(t);
-      }
-    });
-
-    await updateProgress();
-    await Promise.all(workers);
-
-    const allFailed = failCount === total;
-    const allPublished = successCount === total;
-
-    // DONE: 全部发布成功 or 有成功且无待确认（允许部分失败用 job.error 表达）
-    // PAUSED: 存在待确认（需要用户在发布页手动完成/确认）
-    // FAILED: 全部失败
-    let finalState: Job['state'] = 'DONE';
-    if (allPublished) finalState = 'DONE';
-    else if (unconfirmedCount > 0) finalState = 'PAUSED';
-    else if (allFailed) finalState = 'FAILED';
-    else if (successCount === 0 && failCount > 0) finalState = 'FAILED';
-    else finalState = 'DONE';
-
-    const summaryParts: string[] = [];
-    if (successCount) summaryParts.push(`成功 ${successCount}/${total}`);
-    if (unconfirmedCount) summaryParts.push(`待确认 ${unconfirmedCount}/${total}`);
-    if (failCount) summaryParts.push(`失败 ${failCount}/${total}`);
-    const summary = summaryParts.join('，');
-
-    await db.jobs.update(jobId, {
-      state: finalState as any,
-      progress: 100,
-      updatedAt: Date.now(),
-      results,
-      error: finalState === 'FAILED'
-        ? (summary || '全部失败，请查看日志')
-        : unconfirmedCount > 0 || failCount > 0
-          ? summary
-          : undefined,
-    });
-
-    logger.info('job', `Job completed: ${jobId} (success: ${successCount}, unconfirmed: ${unconfirmedCount}, failed: ${failCount})`);
-
-    // 发送通知
-    try {
-      await chrome.notifications.create({
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icon.png'),
-        title: 'SyncCaster',
-        message: allFailed
-          ? `文章《${post.title}》发布失败（全部失败）`
-          : `文章《${post.title}》发布完成（成功${successCount}，失败${failCount}）`,
-      });
-    } catch (e) {
-      logger.warn('job', '通知发送失败', { error: e });
-    }
-  } catch (error: any) {
-    logger.error('job', `Job failed: ${jobId}`, { error });
-    await db.jobs.update(jobId, {
-      state: 'FAILED',
-      error: error.message,
-      updatedAt: Date.now(),
-    });
-  }
-}
-
-/**
- * 处理排期任务
- */
-async function processScheduledJobs() {
-  const now = Date.now();
-  const jobs = await db.jobs
-    .where('state')
-    .equals('PENDING')
-    .and((job) => !!job.scheduleAt && job.scheduleAt <= now)
-    .toArray();
-  
-  logger.info('scheduler', `Found ${jobs.length} scheduled jobs`);
-  
-  for (const job of jobs) {
-    await startJob(job.id);
-  }
+  return getManagedJobStatus(jobId);
 }
 
 /**

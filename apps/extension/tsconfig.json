@@ -7,6 +7,7 @@
       "@/*": ["src/*"],
       "@synccaster/core": ["../../packages/core/src"],
       "@synccaster/adapters": ["../../packages/adapters/src"],
+      "@synccaster/agent-protocol": ["../../packages/agent-protocol/src"],
       "@synccaster/utils": ["../../packages/utils/src"]
     }
   },

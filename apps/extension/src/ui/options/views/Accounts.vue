@@ -49,6 +49,22 @@
           </div>
           
           <div class="account-right">
+            <n-tag
+              v-if="isDefaultPublishAccount(account)"
+              size="small"
+              type="success"
+              :bordered="false"
+            >
+              默认发布
+            </n-tag>
+            <n-button
+              v-else
+              size="small"
+              quaternary
+              @click="setDefaultPublishAccount(account)"
+            >
+              设为默认
+            </n-button>
             <n-tooltip v-if="account.status === 'expired'" trigger="hover">
               <template #trigger>
                 <span class="status-dot status-error"></span>
@@ -117,7 +133,12 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
-import { db, type Account } from '@synccaster/core';
+import {
+  db,
+  getDefaultPublishAccountMap,
+  setDefaultPublishAccountId,
+  type Account,
+} from '@synccaster/core';
 import { useMessage } from 'naive-ui';
 
 const ACCOUNTS_AUTO_REFRESH_THROTTLE_MS = 5 * 1000;
@@ -128,6 +149,7 @@ const AUTO_DETECT_UNBOUND_STORAGE_KEY = 'lastAutoDetectUnboundAt';
 defineProps<{ isDark?: boolean }>();
 const message = useMessage();
 const accounts = ref<Account[]>([]);
+const defaultPublishAccountMap = ref<Record<string, string>>({});
 const reloginLoadingMap = reactive<Record<string, boolean>>({});
 const loginLoadingMap = reactive<Record<string, boolean>>({});
 const refreshingAll = ref(false);
@@ -337,7 +359,10 @@ async function quickStatusCheckOnStartup() {
 
 async function loadAccounts() {
   try {
-    const all = await db.accounts.toArray();
+    const [all, defaultMap] = await Promise.all([
+      db.accounts.toArray(),
+      getDefaultPublishAccountMap(),
+    ]);
 
     // UI 层防御性去重：确保同一平台仅展示一个账号
     const map = new Map<string, Account>();
@@ -358,9 +383,27 @@ async function loadAccounts() {
     }
 
     accounts.value = Array.from(map.values());
+    defaultPublishAccountMap.value = defaultMap;
   } catch (error) {
     console.error('Failed to load accounts:', error);
     message.error('加载账号失败');
+  }
+}
+
+function isDefaultPublishAccount(account: Account): boolean {
+  return defaultPublishAccountMap.value[account.platform] === account.id;
+}
+
+async function setDefaultPublishAccount(account: Account) {
+  try {
+    await setDefaultPublishAccountId(account.platform, account.id);
+    defaultPublishAccountMap.value = {
+      ...defaultPublishAccountMap.value,
+      [account.platform]: account.id,
+    };
+    message.success(`已将 ${getPlatformName(account.platform)} 设为默认发布账号`);
+  } catch (error: any) {
+    message.error(`设置默认发布账号失败: ${error?.message || '未知错误'}`);
   }
 }
 

@@ -1,5 +1,6 @@
 export * from './types';
 export * from './db';
+export * from './config/default-publish-accounts';
 export * from './collector';
 export * from './storage';
 // 注意：ast/pipeline 中的 CodeBlockNode 与 types 中的冲突，使用命名导出

@@ -43,6 +43,7 @@ Thumbs.db
 
 # Extension build artifacts
 apps/extension/public/md-editor/static/js/
+apps/agent-bridge/.native-host/
 
 # Backup files
 *.bak

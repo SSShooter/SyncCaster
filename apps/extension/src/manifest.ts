@@ -73,6 +73,7 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
       'sidePanel',
       'downloads',
       'activeTab',
+      'nativeMessaging',
       'cookies',  // ✨ 必需：读取 Cookie 以检测登录状态
       'clipboardRead',
       'clipboardWrite',
@@ -248,6 +249,7 @@ const manifest = {
     'sidePanel',
     'downloads',
     'activeTab',
+    'nativeMessaging',
     'cookies',  // ✨ 必需：读取 Cookie 以检测登录状态
     'clipboardRead',
     'clipboardWrite',
