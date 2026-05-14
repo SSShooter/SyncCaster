@@ -1,6 +1,18 @@
 import type { PlatformAdapter } from './base';
 import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
 
+export function buildInfoqDraftUrl(rawDraftId: string | number | null | undefined): string | null {
+  const draftId = String(rawDraftId ?? '').trim();
+  if (!draftId) return null;
+  if (!/^[A-Za-z0-9_-]+$/.test(draftId)) return null;
+  return `https://xie.infoq.cn/draft/${draftId}`;
+}
+
+export function isInfoqDraftEditorUrl(url: string | null | undefined): boolean {
+  const value = String(url || '').trim();
+  return /^https:\/\/xie\.infoq\.cn\/draft\/[A-Za-z0-9_-]+(?:[/?#].*)?$/i.test(value);
+}
+
 /**
  * InfoQ（写作台 xie.infoq.cn）适配器
  *
@@ -82,12 +94,13 @@ export const infoqAdapter: PlatformAdapter = {
         const data = await res.json();
         console.log('[infoq] Draft API response:', data);
         const draftId = data?.data?.id || data?.id || data?.data?.draftId;
+        const draftUrl = buildInfoqDraftUrl(draftId);
 
-        if (!draftId) {
+        if (!draftUrl) {
           return { success: false, error: 'missing draftId in response' };
         }
 
-        return { success: true, draftUrl: `https://xie.infoq.cn/draft/${draftId}` };
+        return { success: true, draftUrl };
       } catch (e: any) {
         console.error('[infoq] Failed to create draft:', e);
         return { success: false, error: e?.message || 'unknown error' };
@@ -96,6 +109,15 @@ export const infoqAdapter: PlatformAdapter = {
 
     fillAndPublish: async function (payload) {
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+      if (!isInfoqDraftEditorUrl(window.location.href)) {
+        return {
+          url: window.location.href,
+          __synccasterError: {
+            message: `InfoQ 必须先进入草稿编辑页，当前页面不是可写草稿页: ${window.location.href}`,
+          },
+        } as any;
+      }
 
       const titleText = String((payload as any).title || '').trim();
       const markdown = String((payload as any).contentMarkdown || '');

@@ -700,6 +700,23 @@ export async function fetchUserInfoWithFallback(
   return primaryResult;
 }
 
+function mergeAuthEvidenceWithCookieFallback(platform: string, primaryResult: UserInfo, cookieResult: UserInfo): UserInfo {
+  if (!cookieResult.loggedIn) return primaryResult;
+
+  return {
+    ...cookieResult,
+    platform,
+    nickname: primaryResult.nickname || cookieResult.nickname,
+    avatar: primaryResult.avatar || cookieResult.avatar,
+    userId: primaryResult.userId || cookieResult.userId,
+    meta: primaryResult.meta || cookieResult.meta,
+    detectionMethod: cookieResult.detectionMethod,
+    error: undefined,
+    errorType: undefined,
+    retryable: undefined,
+  };
+}
+
 // ============================================================
 // 各平台 API 实现
 // ============================================================
@@ -2359,6 +2376,183 @@ const tencentCloudApi: PlatformApiConfig = {
       return /\.(png|jpe?g|gif|webp)(?:\?|$)/i.test(lower);
     };
 
+    async function tryParseProfileFromHtml(): Promise<Pick<UserInfo, 'nickname' | 'avatar' | 'userId'> | null> {
+      const endpoints = [
+        // 对标 COSE：创作中心页面稳定包含当前用户信息（含头像）
+        'https://cloud.tencent.com/developer/creator',
+        'https://cloud.tencent.com/developer/user',
+        'https://cloud.tencent.com/developer/user/info',
+      ];
+
+      for (const url of endpoints) {
+        try {
+          const res = await fetchWithCookies(
+            url,
+            {
+              headers: {
+                Accept: 'text/html,application/xhtml+xml',
+                Referer: 'https://cloud.tencent.com/',
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+              },
+            },
+            0
+          );
+
+          const finalUrl = res.url || url;
+          if (finalUrl.includes('login') || finalUrl.includes('passport')) continue;
+          // COSE 经验：未登录访问 /developer/creator 常会被重定向到其它页面
+          if (url.includes('/developer/creator') && !finalUrl.includes('/developer/creator')) continue;
+
+          const html = await res.text();
+          const scope = html.substring(0, 200000);
+
+          // 对标 COSE：使用更宽松的正则匹配用户昵称
+          // COSE 使用 [\s\S]*? 非贪婪匹配，不限制字符数
+          const regexNickname =
+            scope.match(/"userInfo"[\s\S]*?"nickname"\s*:\s*"([^"\\]{1,80})"/i)?.[1] ||
+            scope.match(/"creatorInfo"[\s\S]*?"nickname"\s*:\s*"([^"\\]{1,80})"/i)?.[1] ||
+            scope.match(/"currentUser"[\s\S]*?"nickname"\s*:\s*"([^"\\]{1,80})"/i)?.[1] ||
+            scope.match(/"isCreator"\s*:\s*true[\s\S]*?"nickname"\s*:\s*"([^"\\]{1,80})"/i)?.[1];
+
+          // 对标 COSE：使用更宽松的正则匹配头像 URL
+          // COSE 使用 [\s\S]*? 非贪婪匹配，不限制字符数
+          const regexAvatar =
+            scope.match(/"userInfo"[\s\S]*?"avatarUrl"\s*:\s*"([^"]+)"/i)?.[1] ||
+            scope.match(/"creatorInfo"[\s\S]*?"avatarUrl"\s*:\s*"([^"]+)"/i)?.[1] ||
+            scope.match(/"currentUser"[\s\S]*?"avatarUrl"\s*:\s*"([^"]+)"/i)?.[1] ||
+            scope.match(/"userInfo"[\s\S]*?"avatar"\s*:\s*"([^"]+)"/i)?.[1] ||
+            scope.match(/"avatarUrl"\s*:\s*"([^"]+)"/i)?.[1] ||
+            // COSE 备用方案：直接匹配任何 avatar 字段的 https URL
+            scope.match(/"avatar"\s*:\s*"(https?:\/\/[^"]+)"/i)?.[1];
+
+          // 优先匹配开发者社区特有的用户 ID（creatorId/authorId/developerId）
+          // 避免使用 uin（腾讯通用账号 ID/QQ号），因为它不能用于构建开发者社区用户主页链接
+          const regexUserId =
+            scope.match(/"creatorId"\s*:\s*"?(\d{3,24})"?/i)?.[1] ||
+            scope.match(/"authorId"\s*:\s*"?(\d{3,24})"?/i)?.[1] ||
+            scope.match(/"developerId"\s*:\s*"?(\d{3,24})"?/i)?.[1] ||
+            scope.match(/"uid"\s*:\s*"?(\d{3,24})"?/i)?.[1] ||
+            scope.match(/"userId"\s*:\s*"?(\d{3,24})"?/i)?.[1];
+
+          const quickNickname = cleanNickname(regexNickname);
+          const quickAvatar = normalizeUrl(decodeEmbeddedString(regexAvatar));
+          const quickUserId = regexUserId ? String(regexUserId).trim() : undefined;
+          if (quickNickname || quickAvatar || quickUserId) {
+            return { nickname: quickNickname, avatar: quickAvatar, userId: quickUserId };
+          }
+
+          // 常见信息会以 JSON 形式内嵌（字段名不稳定，做多候选）。
+          const jsonCandidates: any[] = [];
+          const scriptJsonMatches = Array.from(html.matchAll(/<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi));
+          for (const m of scriptJsonMatches) {
+            const raw = (m[1] || '').trim();
+            if (!raw) continue;
+            try {
+              jsonCandidates.push(JSON.parse(raw));
+            } catch {}
+          }
+
+          const inlineJsonMatches = Array.from(html.matchAll(/\b(__NUXT__|__INITIAL_STATE__|__NEXT_DATA__)\s*=\s*([\s\S]*?);\s*<\/script>/gi));
+          for (const m of inlineJsonMatches) {
+            const raw = (m[2] || '').trim();
+            if (!raw) continue;
+            try {
+              jsonCandidates.push(JSON.parse(raw));
+            } catch {}
+          }
+
+          const pickFromObject = (obj: any): { nickname?: string; avatar?: string; userId?: string } => {
+            if (!obj || typeof obj !== 'object') return {};
+
+            const nickname =
+              obj.nickName ||
+              obj.nickname ||
+              obj.name ||
+              obj.userName ||
+              obj.username ||
+              obj.displayName ||
+              obj.realName;
+
+            const avatar =
+              obj.avatar ||
+              obj.avatarUrl ||
+              obj.avatarURL ||
+              obj.avatar_url ||
+              obj.headUrl ||
+              obj.head_url ||
+              obj.head;
+
+            // 优先使用开发者社区特有的用户 ID，避免使用 uin（腾讯通用账号 ID）
+            const uid = obj.creatorId || obj.authorId || obj.developerId || obj.uid || obj.userId || obj.id;
+
+            return {
+              nickname: cleanTitleLikeNickname(typeof nickname === 'string' ? nickname.trim() : undefined),
+              avatar: normalizeUrl(avatar),
+              userId: uid ? String(uid).trim() : undefined,
+            };
+          };
+
+          const deepScan = (node: any, depth = 0): { nickname?: string; avatar?: string; userId?: string } => {
+            if (!node || depth > 6) return {};
+            const direct = pickFromObject(node);
+            if (direct.nickname || direct.avatar) return direct;
+
+            if (Array.isArray(node)) {
+              for (const item of node) {
+                const hit = deepScan(item, depth + 1);
+                if (hit.nickname || hit.avatar) return hit;
+              }
+              return {};
+            }
+
+            if (typeof node === 'object') {
+              for (const key of Object.keys(node)) {
+                const hit = deepScan((node as any)[key], depth + 1);
+                if (hit.nickname || hit.avatar) return hit;
+              }
+            }
+            return {};
+          };
+
+          for (const j of jsonCandidates) {
+            const hit = deepScan(j);
+            if (hit.nickname || hit.avatar) return hit;
+          }
+
+          // 兜底：从 HTML img / meta 提取
+          let avatar: string | undefined;
+          const avatarPatterns = [
+            /<img[^>]+(?:class|id)=["'][^"']*(?:avatar|portrait|head|user|profile)[^"']*["'][^>]+(?:src|data-src|data-original)=["']([^"']+)["']/i,
+            /<img[^>]+(?:src|data-src|data-original)=["']([^"']+)["'][^>]+(?:class|id)=["'][^"']*(?:avatar|portrait|head|user|profile)[^"']*["']/i,
+            /<img[^>]+(?:src|data-src|data-original)=["']([^"']+)["'][^>]+alt=["'][^"']*(?:头像|avatar|head|profile)[^"']*["']/i,
+            /<div[^>]+(?:class|id)=["'][^"']*(?:avatar|portrait|head|user|profile)[^"']*["'][^>]*style=["'][^"']*background-image:\s*url\(["']?([^"')]+)["']?\)/i,
+            /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+            /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
+          ];
+
+          for (const pattern of avatarPatterns) {
+            const match = html.match(pattern);
+            const candidate = normalizeUrl(match?.[1]);
+            if (candidate && isLikelyAvatarUrl(candidate)) {
+              avatar = candidate;
+              break;
+            }
+          }
+
+          const rawTitle =
+            html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+            html.match(/<title[^>]*>([^<]{2,80})<\/title>/i)?.[1];
+          const nickname = cleanTitleLikeNickname(rawTitle);
+
+          if (nickname || avatar) return { nickname, avatar };
+        } catch (e: any) {
+          logger.debug('tencent-cloud', 'HTML 探针失败', { url, error: e?.message || String(e) });
+        }
+      }
+      return null;
+    }
+
     // 先尝试 API 获取用户信息（可以获取到正确的 userId）
     const apiEndpoints = [
       'https://cloud.tencent.com/developer/api/user/info',
@@ -2384,12 +2578,12 @@ const tencentCloudApi: PlatformApiConfig = {
           // 优先使用开发者社区特有的用户 ID（creatorId/authorId/developerId）
           // 避免使用 uin（腾讯通用账号 ID/QQ号），因为它不能用于构建开发者社区用户主页链接
           const userIdRaw = user?.creatorId || user?.authorId || user?.developerId || user?.uid || user?.userId || user?.id;
-          const userId = userIdRaw ? String(userIdRaw).trim() : '';
-          const nickname =
+          let userId = userIdRaw ? String(userIdRaw).trim() : '';
+          let nickname =
             cleanTitleLikeNickname(
               user?.name || user?.nickName || user?.nickname || user?.nick || user?.userName || user?.username || user?.displayName
             ) || undefined;
-          const avatar = normalizeUrl(
+          const avatarCandidate = normalizeUrl(
             user?.avatar ||
               user?.avatarUrl ||
               user?.avatarURL ||
@@ -2400,16 +2594,35 @@ const tencentCloudApi: PlatformApiConfig = {
               user?.face ||
               user?.photo
           );
+          let avatar = isLikelyAvatarUrl(avatarCandidate) ? avatarCandidate : undefined;
+          let detectionMethod: UserInfo['detectionMethod'] = 'api';
 
           if (ok && userId) {
-            logger.info('tencent-cloud', '从 API 获取到用户信息', { userId, nickname });
+            const profile = await tryParseProfileFromHtml();
+            if (profile?.userId && /^\d+$/.test(profile.userId)) {
+              userId = profile.userId;
+              detectionMethod = 'html';
+            }
+            if (profile?.nickname) {
+              const preferredNickname = cleanTitleLikeNickname(profile.nickname);
+              if (preferredNickname && (!nickname || nickname === '腾讯云用户' || nickname !== preferredNickname)) {
+                nickname = preferredNickname;
+                detectionMethod = 'html';
+              }
+            }
+            if (profile?.avatar && isLikelyAvatarUrl(profile.avatar)) {
+              avatar = profile.avatar;
+              detectionMethod = 'html';
+            }
+
+            logger.info('tencent-cloud', '从 API 获取到用户信息', { userId, nickname, detectionMethod });
             return {
               loggedIn: true,
               platform: 'tencent-cloud',
               userId,
               nickname: nickname || '腾讯云用户',
-              avatar: avatar || undefined,
-              detectionMethod: 'api',
+              avatar,
+              detectionMethod,
             };
           }
         }
@@ -2443,6 +2656,13 @@ const tencentCloudApi: PlatformApiConfig = {
     // 检查 ownerUin（所有者 ID）
     const ownerUinCookie = allCookies.find(c => c.name === 'ownerUin' && c.value && c.value.length > 3);
 
+    const hasWeakSessionSignal =
+      !!uinCookie ||
+      !!skeyCookie ||
+      !!intlCookie ||
+      !!csrfCookie ||
+      !!loginTypeCookie;
+
     // 加强检测逻辑：要求更严格的 Cookie 组合
     // 单独的 uin/p_uin 可能来自其他腾讯服务（QQ、微信等），不能作为开发者社区登录的依据
     // 必须满足以下条件之一：
@@ -2455,190 +2675,16 @@ const tencentCloudApi: PlatformApiConfig = {
       ownerUinCookie ||              // 腾讯云账号所有者
       qcloudUidCookie;               // 腾讯云用户 ID
 
-    if (hasStrongSession) {
+    const htmlProfile = await tryParseProfileFromHtml();
+    const hasProfileEvidence = !!(htmlProfile?.nickname || htmlProfile?.avatar || htmlProfile?.userId);
+    const allowHtmlSessionRecovery = hasProfileEvidence && hasWeakSessionSignal;
+
+    if (hasStrongSession || allowHtmlSessionRecovery) {
       // 注意：不要使用 uin/ownerUin Cookie 作为用户 ID
       // uin 是腾讯通用账号 ID（QQ号），不能用于构建开发者社区用户主页链接
       // 开发者社区的用户 ID 需要从 API 或 HTML 页面中获取
       let userId: string | undefined = undefined;
-
-      const tryParseProfileFromHtml = async (): Promise<Pick<UserInfo, 'nickname' | 'avatar' | 'userId'> | null> => {
-        const endpoints = [
-          // 对标 COSE：创作中心页面稳定包含当前用户信息（含头像）
-          'https://cloud.tencent.com/developer/creator',
-          'https://cloud.tencent.com/developer/user',
-          'https://cloud.tencent.com/developer/user/info',
-        ];
-
-        for (const url of endpoints) {
-          try {
-            const res = await fetchWithCookies(
-              url,
-              {
-                headers: {
-                  Accept: 'text/html,application/xhtml+xml',
-                  Referer: 'https://cloud.tencent.com/',
-                  'Cache-Control': 'no-cache',
-                  Pragma: 'no-cache',
-                },
-              },
-              0
-            );
-
-            const finalUrl = res.url || url;
-            if (finalUrl.includes('login') || finalUrl.includes('passport')) continue;
-            // COSE 经验：未登录访问 /developer/creator 常会被重定向到其它页面
-            if (url.includes('/developer/creator') && !finalUrl.includes('/developer/creator')) continue;
-
-            const html = await res.text();
-            const scope = html.substring(0, 200000);
-
-            // 对标 COSE：使用更宽松的正则匹配用户昵称
-            // COSE 使用 [\s\S]*? 非贪婪匹配，不限制字符数
-            const regexNickname =
-              scope.match(/"userInfo"[\s\S]*?"nickname"\s*:\s*"([^"\\]{1,80})"/i)?.[1] ||
-              scope.match(/"creatorInfo"[\s\S]*?"nickname"\s*:\s*"([^"\\]{1,80})"/i)?.[1] ||
-              scope.match(/"currentUser"[\s\S]*?"nickname"\s*:\s*"([^"\\]{1,80})"/i)?.[1] ||
-              scope.match(/"isCreator"\s*:\s*true[\s\S]*?"nickname"\s*:\s*"([^"\\]{1,80})"/i)?.[1];
-
-            // 对标 COSE：使用更宽松的正则匹配头像 URL
-            // COSE 使用 [\s\S]*? 非贪婪匹配，不限制字符数
-            const regexAvatar =
-              scope.match(/"userInfo"[\s\S]*?"avatarUrl"\s*:\s*"([^"]+)"/i)?.[1] ||
-              scope.match(/"creatorInfo"[\s\S]*?"avatarUrl"\s*:\s*"([^"]+)"/i)?.[1] ||
-              scope.match(/"currentUser"[\s\S]*?"avatarUrl"\s*:\s*"([^"]+)"/i)?.[1] ||
-              scope.match(/"userInfo"[\s\S]*?"avatar"\s*:\s*"([^"]+)"/i)?.[1] ||
-              scope.match(/"avatarUrl"\s*:\s*"([^"]+)"/i)?.[1] ||
-              // COSE 备用方案：直接匹配任何 avatar 字段的 https URL
-              scope.match(/"avatar"\s*:\s*"(https?:\/\/[^"]+)"/i)?.[1];
-
-            // 优先匹配开发者社区特有的用户 ID（creatorId/authorId/developerId）
-            // 避免使用 uin（腾讯通用账号 ID/QQ号），因为它不能用于构建开发者社区用户主页链接
-            const regexUserId =
-              scope.match(/"creatorId"\s*:\s*"?(\d{3,24})"?/i)?.[1] ||
-              scope.match(/"authorId"\s*:\s*"?(\d{3,24})"?/i)?.[1] ||
-              scope.match(/"developerId"\s*:\s*"?(\d{3,24})"?/i)?.[1] ||
-              scope.match(/"uid"\s*:\s*"?(\d{3,24})"?/i)?.[1] ||
-              scope.match(/"userId"\s*:\s*"?(\d{3,24})"?/i)?.[1];
-
-            const quickNickname = cleanNickname(regexNickname);
-            const quickAvatar = normalizeUrl(decodeEmbeddedString(regexAvatar));
-            const quickUserId = regexUserId ? String(regexUserId).trim() : undefined;
-            if (quickNickname || quickAvatar || quickUserId) {
-              return { nickname: quickNickname, avatar: quickAvatar, userId: quickUserId };
-            }
-
-            // 常见信息会以 JSON 形式内嵌（字段名不稳定，做多候选）。
-            const jsonCandidates: any[] = [];
-            const scriptJsonMatches = Array.from(html.matchAll(/<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi));
-            for (const m of scriptJsonMatches) {
-              const raw = (m[1] || '').trim();
-              if (!raw) continue;
-              try {
-                jsonCandidates.push(JSON.parse(raw));
-              } catch {}
-            }
-
-            const inlineJsonMatches = Array.from(html.matchAll(/\b(__NUXT__|__INITIAL_STATE__|__NEXT_DATA__)\s*=\s*([\s\S]*?);\s*<\/script>/gi));
-            for (const m of inlineJsonMatches) {
-              const raw = (m[2] || '').trim();
-              if (!raw) continue;
-              try {
-                jsonCandidates.push(JSON.parse(raw));
-              } catch {}
-            }
-
-            const pickFromObject = (obj: any): { nickname?: string; avatar?: string; userId?: string } => {
-              if (!obj || typeof obj !== 'object') return {};
-
-              const nickname =
-                obj.nickName ||
-                obj.nickname ||
-                obj.name ||
-                obj.userName ||
-                obj.username ||
-                obj.displayName ||
-                obj.realName;
-
-              const avatar =
-                obj.avatar ||
-                obj.avatarUrl ||
-                obj.avatarURL ||
-                obj.avatar_url ||
-                obj.headUrl ||
-                obj.head_url ||
-                obj.head;
-
-              // 优先使用开发者社区特有的用户 ID，避免使用 uin（腾讯通用账号 ID）
-              const uid = obj.creatorId || obj.authorId || obj.developerId || obj.uid || obj.userId || obj.id;
-
-              return {
-                nickname: cleanTitleLikeNickname(typeof nickname === 'string' ? nickname.trim() : undefined),
-                avatar: normalizeUrl(avatar),
-                userId: uid ? String(uid).trim() : undefined,
-              };
-            };
-
-            const deepScan = (node: any, depth = 0): { nickname?: string; avatar?: string; userId?: string } => {
-              if (!node || depth > 6) return {};
-              const direct = pickFromObject(node);
-              if (direct.nickname || direct.avatar) return direct;
-
-              if (Array.isArray(node)) {
-                for (const item of node) {
-                  const hit = deepScan(item, depth + 1);
-                  if (hit.nickname || hit.avatar) return hit;
-                }
-                return {};
-              }
-
-              if (typeof node === 'object') {
-                for (const key of Object.keys(node)) {
-                  const hit = deepScan((node as any)[key], depth + 1);
-                  if (hit.nickname || hit.avatar) return hit;
-                }
-              }
-              return {};
-            };
-
-            for (const j of jsonCandidates) {
-              const hit = deepScan(j);
-              if (hit.nickname || hit.avatar) return hit;
-            }
-
-            // 兜底：从 HTML img / meta 提取
-            let avatar: string | undefined;
-            const avatarPatterns = [
-              /<img[^>]+(?:class|id)=["'][^"']*(?:avatar|portrait|head|user|profile)[^"']*["'][^>]+(?:src|data-src|data-original)=["']([^"']+)["']/i,
-              /<img[^>]+(?:src|data-src|data-original)=["']([^"']+)["'][^>]+(?:class|id)=["'][^"']*(?:avatar|portrait|head|user|profile)[^"']*["']/i,
-              /<img[^>]+(?:src|data-src|data-original)=["']([^"']+)["'][^>]+alt=["'][^"']*(?:头像|avatar|head|profile)[^"']*["']/i,
-              /<div[^>]+(?:class|id)=["'][^"']*(?:avatar|portrait|head|user|profile)[^"']*["'][^>]*style=["'][^"']*background-image:\s*url\(["']?([^"')]+)["']?\)/i,
-              /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
-              /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
-            ];
-
-            for (const pattern of avatarPatterns) {
-              const match = html.match(pattern);
-              const candidate = normalizeUrl(match?.[1]);
-              if (candidate && isLikelyAvatarUrl(candidate)) {
-                avatar = candidate;
-                break;
-              }
-            }
-
-            const rawTitle =
-              html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
-              html.match(/<title[^>]*>([^<]{2,80})<\/title>/i)?.[1];
-            const nickname = cleanTitleLikeNickname(rawTitle);
-
-            if (nickname || avatar) return { nickname, avatar };
-          } catch (e: any) {
-            logger.debug('tencent-cloud', 'HTML 探针失败', { url, error: e?.message || String(e) });
-          }
-        }
-        return null;
-      };
-
-      const profile = await tryParseProfileFromHtml();
+      const profile = htmlProfile;
       const nickname = cleanTitleLikeNickname(profile?.nickname)?.trim() || '腾讯云用户';
       const avatar = isLikelyAvatarUrl(profile?.avatar) ? profile?.avatar : undefined;
 
@@ -2890,7 +2936,17 @@ const segmentfaultApi: PlatformApiConfig = {
     logger.info('segmentfault', 'API 检测失败，尝试使用 HTML 检测');
     try {
       const htmlResult = await fetchSegmentfaultUserFromHtml();
-      if (htmlResult.loggedIn || htmlResult.errorType === AuthErrorType.LOGGED_OUT) {
+      if (htmlResult.loggedIn) {
+        return htmlResult;
+      }
+
+      if (htmlResult.errorType === AuthErrorType.LOGGED_OUT) {
+        logger.info('segmentfault', 'HTML 判定已登出，继续使用 Cookie 证据复核');
+        const cookieResult = await detectViaCookies('segmentfault');
+        const merged = mergeAuthEvidenceWithCookieFallback('segmentfault', htmlResult, cookieResult);
+        if (merged.loggedIn) {
+          return merged;
+        }
         return htmlResult;
       }
     } catch (e: any) {
@@ -4466,6 +4522,50 @@ const oschinaApi: PlatformApiConfig = {
       return trimmed;
     };
 
+    const isLikelyValidNickname = (value?: unknown): value is string => {
+      if (typeof value !== 'string') return false;
+      const trimmed = value.trim();
+      if (!trimmed || trimmed.length > 50) return false;
+      if (/^\d+$/.test(trimmed)) return false;
+      const lower = trimmed.toLowerCase();
+      if (
+        lower.includes('登录') ||
+        lower.includes('注册') ||
+        lower.includes('个人空间') ||
+        lower.includes('开源中国') ||
+        lower.includes('推荐')
+      ) {
+        return false;
+      }
+      return true;
+    };
+
+    const isLikelyValidAvatar = (value?: string): boolean => {
+      if (!value) return false;
+      const lower = value.toLowerCase();
+      return !(
+        lower.includes('logo') ||
+        lower.includes('icon') ||
+        lower.includes('favicon') ||
+        lower.includes('sprite') ||
+        lower.includes('loading') ||
+        lower.includes('placeholder') ||
+        lower.includes('default')
+      );
+    };
+
+    const extractHtmlSegmentAroundUserId = (html: string, userId?: string, fallbackWindow = 8000): string => {
+      if (!html) return '';
+      if (!userId) return html.substring(0, Math.min(html.length, fallbackWindow));
+      const patterns = [`my.oschina.net/u/${userId}`, `/u/${userId}`, `"${userId}"`, `'${userId}'`];
+      for (const pattern of patterns) {
+        const idx = html.indexOf(pattern);
+        if (idx < 0) continue;
+        return html.substring(Math.max(0, idx - fallbackWindow), Math.min(html.length, idx + fallbackWindow));
+      }
+      return html.substring(0, Math.min(html.length, fallbackWindow));
+    };
+
     // 1. Cookie 检测 - 获取用户 ID
     try {
       const mainCookies = await chrome.cookies.getAll({ url: 'https://www.oschina.net/' });
@@ -4585,17 +4685,14 @@ const oschinaApi: PlatformApiConfig = {
       apiResult = { success: true, loggedIn: false, error: apiLoggedOut };
     }
 
-    // 登录证据：有效的 Cookie 或 API 确认登录
-    const hasLoginEvidence = cookieResult.hasValidCookie || (apiResult.success && apiResult.loggedIn);
-
     // 3. 如有用户 ID，优先从用户主页补全昵称/头像（用户专属区域，避免误抓）
     let profileUserId = cookieResult.userId || apiResult.userInfo?.userId;
     let profileFromHome: { userId?: string; nickname?: string; avatar?: string } | null = null;
+    let homeRedirectUserId: string | undefined;
 
-    // 尝试从个人空间首页提取用户信息（不需要登录证据，因为 Cookie 检测可能失败）
-    const shouldTryHome =
-      hasLoginEvidence &&
-      (!profileUserId || (apiResult.userInfo && (!apiResult.userInfo.nickname || !apiResult.userInfo.avatar)));
+    // 尝试从个人空间首页提取用户信息。
+    // 这里始终尝试一次，因为已登录但 Cookie/API 暂时取不到时，最终跳转到 /u/{id} 本身就是强登录证据。
+    const shouldTryHome = true;
 
     if (shouldTryHome) {
       try {
@@ -4607,8 +4704,16 @@ const oschinaApi: PlatformApiConfig = {
         });
 
         if (homeRes.ok) {
+          const finalHomeUrl = homeRes.url || '';
           const homeHtml = await homeRes.text();
+          const urlIdMatch = finalHomeUrl.match(/my\.oschina\.net\/u\/(\d+)/i) || finalHomeUrl.match(/\/u\/(\d+)/i);
+          if (urlIdMatch?.[1]) {
+            homeRedirectUserId = urlIdMatch[1];
+          }
+
           const scopeHtml = (() => {
+            const userScoped = extractHtmlSegmentAroundUserId(homeHtml, urlIdMatch?.[1] || cookieResult.userId, 12000);
+            if (userScoped && userScoped.trim().length > 0) return userScoped;
             const lower = homeHtml.toLowerCase();
             const markers = ['sidebar-section user-info', 'space-sidebar', 'user-text', 'avatar-wrap'];
             for (const marker of markers) {
@@ -4619,7 +4724,14 @@ const oschinaApi: PlatformApiConfig = {
             return homeHtml.substring(0, 60000);
           })();
 
-          const idMatch = scopeHtml.match(/my\.oschina\.net\/u\/(\d+)/i) || homeHtml.match(/my\.oschina\.net\/u\/(\d+)/i);
+          const idMatch =
+            urlIdMatch ||
+            (cookieResult.userId ? ([undefined, cookieResult.userId] as unknown as RegExpMatchArray) : null) ||
+            (apiResult.userInfo?.userId ? ([undefined, String(apiResult.userInfo.userId)] as unknown as RegExpMatchArray) : null) ||
+            scopeHtml.match(/my\.oschina\.net\/u\/(\d+)/i) ||
+            scopeHtml.match(/\/u\/(\d+)/i) ||
+            homeHtml.match(/my\.oschina\.net\/u\/(\d+)/i) ||
+            homeHtml.match(/\/u\/(\d+)/i);
           const extractedUserId = idMatch?.[1];
 
           const nicknamePatterns = [
@@ -4634,7 +4746,7 @@ const oschinaApi: PlatformApiConfig = {
             const match = scopeHtml.match(pattern) || homeHtml.match(pattern);
             if (match?.[1]) {
               const value = match[1].trim();
-              if (value && value.length > 0 && value.length < 50 && !/^\d+$/.test(value)) {
+              if (isLikelyValidNickname(value)) {
                 nickname = value;
                 break;
               }
@@ -4655,16 +4767,7 @@ const oschinaApi: PlatformApiConfig = {
             if (match?.[1]) {
               const rawUrl = match[1].trim();
               const normalized = normalizeUrl(rawUrl, 'https://my.oschina.net') || normalizeUrl(rawUrl);
-              if (
-                normalized &&
-                !normalized.includes('logo') &&
-                !normalized.includes('icon') &&
-                !normalized.includes('favicon') &&
-                !normalized.includes('sprite') &&
-                !normalized.includes('loading') &&
-                !normalized.includes('placeholder') &&
-                !normalized.includes('default')
-              ) {
+              if (normalized && isLikelyValidAvatar(normalized)) {
                 avatar = normalized;
                 break;
               }
@@ -4685,6 +4788,12 @@ const oschinaApi: PlatformApiConfig = {
         logger.warn('oschina', '个人空间首页解析失败', { error: e?.message || String(e) });
       }
     }
+
+    const hasLoginEvidence =
+      cookieResult.hasValidCookie ||
+      (apiResult.success && apiResult.loggedIn) ||
+      !!homeRedirectUserId;
+
     // 尝试从用户主页补全信息（不需要登录证据，因为 Cookie 检测可能失败）
     const shouldFetchProfilePage =
       hasLoginEvidence &&
@@ -4710,8 +4819,8 @@ const oschinaApi: PlatformApiConfig = {
 
           // 扩大搜索范围，包含更多可能的用户信息区域
           const scopeHtml = (() => {
-            const lower = userPageHtml.toLowerCase();
-            // 开源中国用户主页的用户信息可能在多个区域
+            const scopedByUserId = extractHtmlSegmentAroundUserId(userPageHtml, profileUserId, 18000);
+            const lower = scopedByUserId.toLowerCase();
             const markers = [
               'sidebar-section user-info',
               'space-sidebar',
@@ -4721,14 +4830,15 @@ const oschinaApi: PlatformApiConfig = {
               'user-profile',
               'profile-header',
               'user-header',
+              'user-info',
+              'info-left',
             ];
             for (const marker of markers) {
               const idx = lower.indexOf(marker);
               if (idx < 0) continue;
-              return userPageHtml.substring(Math.max(0, idx - 8000), Math.min(userPageHtml.length, idx + 20000));
+              return scopedByUserId.substring(Math.max(0, idx - 4000), Math.min(scopedByUserId.length, idx + 16000));
             }
-            // 如果没有找到特定标记，返回更大范围的内容
-            return userPageHtml.substring(0, 80000);
+            return scopedByUserId || userPageHtml.substring(0, 80000);
           })();
 
           // 从用户主页提取信息（这里的信息是用户专属的，不会误抓）
@@ -4742,6 +4852,9 @@ const oschinaApi: PlatformApiConfig = {
           // 方法1：从用户信息区域提取昵称
           // 开源中国用户主页结构可能变化，需要多种匹配模式
           const userNamePatterns = [
+            // 当前 my.oschina.net 用户主页的新结构：<div class="user-info"><div class="info-left"><h3>osc_xxx</h3>
+            /<div[^>]*class="[^"]*user-info[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*info-left[^"]*"[^>]*>[\s\S]*?<h3[^>]*>([^<]+)<\/h3>/i,
+            /<div[^>]*class="[^"]*info-left[^"]*"[^>]*>[\s\S]*?<h3[^>]*>([^<]+)<\/h3>/i,
             // 侧边栏用户信息区（截图位置）：<h3 class="user-name">...<span class="name">昵称</span>
             /<div[^>]*class="[^"]*sidebar-section[^"]*user-info[^"]*"[^>]*>[\s\S]*?<span[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)<\/span>/i,
             /<h3[^>]*class="[^"]*user-name[^"]*"[^>]*>[\s\S]*?<span[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)<\/span>/i,
@@ -4757,11 +4870,8 @@ const oschinaApi: PlatformApiConfig = {
             /<div[^>]*class="[^"]*user-info-name[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i,
             /<div[^>]*class="[^"]*user-header[^"]*"[^>]*>[\s\S]*?<h2[^>]*>([^<]+)<\/h2>/i,
             /<div[^>]*class="[^"]*user-header[^"]*"[^>]*>[\s\S]*?<h3[^>]*>([^<]+)<\/h3>/i,
-            // 页面中的 h1/h2 标签（用户名）
-            /<h1[^>]*>([^<]+)<\/h1>/i,
             /<h2[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)<\/h2>/i,
-            // 更通用的用户链接匹配
-            /<a[^>]*href="[^"]*\/u\/\d+[^"]*"[^>]*>([^<]+)<\/a>/i,
+            /<a[^>]*href="[^"]*\/u\/\d+[^"]*"[^>]*class="[^"]*(?:user-name|name)[^"]*"[^>]*>([^<]+)<\/a>/i,
             // 用户信息卡片中的昵称
             /<div[^>]*class="[^"]*user-info[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i,
             // 页面中的 h2/h3 用户名（限定在用户信息区域）
@@ -4769,18 +4879,13 @@ const oschinaApi: PlatformApiConfig = {
             // 用户昵称/账号名（开源中国自动生成的用户名格式为 osc_XXXXXXXX）
             /<span[^>]*class="[^"]*(?:nickname|account|name)[^"]*"[^>]*>([^<]+)<\/span>/i,
             /<div[^>]*class="[^"]*(?:nickname|account|name)[^"]*"[^>]*>([^<]+)<\/div>/i,
-            // 新增：更宽松的用户名匹配
-            /<span[^>]*class="name"[^>]*>([^<]+)<\/span>/i,
-            /<div[^>]*class="name"[^>]*>([^<]+)<\/div>/i,
           ];
 
           for (const pattern of userNamePatterns) {
-            const match = scopeHtml.match(pattern) || userPageHtml.match(pattern);
+            const match = scopeHtml.match(pattern);
             if (match?.[1]) {
               const value = match[1].trim();
-              // 验证是有效的用户名（不是空白，长度合理）
-              // 注意：开源中国的自动生成用户名格式为 osc_XXXXXXXX，需要支持
-              if (value && value.length > 0 && value.length < 50 && !/^\d+$/.test(value)) {
+              if (isLikelyValidNickname(value)) {
                 nickname = value;
                 logger.info('oschina', '从用户主页提取到昵称', { nickname, pattern: pattern.toString().substring(0, 50) });
                 break;
@@ -4803,7 +4908,7 @@ const oschinaApi: PlatformApiConfig = {
                 .replace(/\s*-\s*中文开源技术交流社区.*$/i, '')
                 .trim();
               // 支持 osc_ 开头的用户名
-              if (cleanTitle && cleanTitle.length > 0 && cleanTitle.length < 50 && !/^\d+$/.test(cleanTitle) && cleanTitle !== '个人空间') {
+              if (isLikelyValidNickname(cleanTitle) && cleanTitle !== '个人空间') {
                 nickname = cleanTitle;
                 logger.info('oschina', '从 title 提取到昵称', { nickname });
               }
@@ -4813,6 +4918,8 @@ const oschinaApi: PlatformApiConfig = {
           // 用户主页头像提取 - 放宽过滤条件
           // 开源中国的头像可能在多种位置和使用不同的 CDN
           const avatarPatterns = [
+            // 当前 my.oschina.net 新结构：头像是 ant-avatar span，背景色承载首字母头像
+            /<span[^>]*class="[^"]*ant-avatar[^"]*"[^>]*style=["']([^"']+)["']/i,
             // 侧边栏头像（截图位置）：avatar-wrap 可能使用背景图或 img
             /<div[^>]*class="[^"]*avatar-wrap[^"]*"[^>]*style=["'][^"']*background-image:\s*url\(['"]?([^'")\s]+)['"]?\)[^"']*["']/i,
             /<div[^>]*class="[^"]*avatar-wrap[^"]*"[^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/i,
@@ -4842,16 +4949,15 @@ const oschinaApi: PlatformApiConfig = {
           ];
 
           for (const pattern of avatarPatterns) {
-            const match = scopeHtml.match(pattern) || userPageHtml.match(pattern);
+            const match = scopeHtml.match(pattern);
             if (match?.[1]) {
               const rawUrl = match[1].trim();
+              if (/background-color\s*:/i.test(rawUrl)) {
+                // ant-avatar 纯色占位头像，没有真实图片 URL，跳过以免写入错误头像
+                continue;
+              }
               const normalized = normalizeUrl(rawUrl, 'https://my.oschina.net') || normalizeUrl(rawUrl);
-              // 放宽验证条件：只要是有效的 URL 且不是明显的 logo/icon
-              if (normalized &&
-                !normalized.includes('logo') && !normalized.includes('icon') &&
-                !normalized.includes('favicon') && !normalized.includes('sprite') &&
-                !normalized.includes('loading') && !normalized.includes('placeholder') &&
-                !normalized.includes('default')) {
+              if (normalized && isLikelyValidAvatar(normalized)) {
                 avatar = normalized;
                 logger.info('oschina', '从用户主页提取到头像', { avatar });
                 break;
@@ -5076,20 +5182,8 @@ const oschinaApi: PlatformApiConfig = {
       };
     }
 
-    // 情况3: API 明确返回未登录
-    if (apiResult.success && apiResult.loggedIn === false) {
-      logger.info('oschina', 'API 检测确认未登录');
-      return {
-        loggedIn: false,
-        platform: 'oschina',
-        errorType: AuthErrorType.LOGGED_OUT,
-        error: '需要登录',
-        retryable: false,
-      };
-    }
-
-    // 情况4: HTML 检测“疑似已登录”（有退出按钮或用户下拉菜单）
-    // 严格模式：仅凭 HTML 标志不允许返回 loggedIn=true，必须有 Cookie/API 的强证据。
+    // 情况3: HTML 检测“疑似已登录”（有退出按钮或用户下拉菜单）
+    // 当首页已经出现当前用户菜单 / 个人中心链接时，将其视为强登录证据。
     if (htmlResult.success && htmlResult.loggedIn) {
       if (cookieResult.hasValidCookie || (apiResult.success && apiResult.loggedIn === true)) {
         return {
@@ -5111,6 +5205,18 @@ const oschinaApi: PlatformApiConfig = {
         nickname: htmlResult.userInfo?.nickname || '开源中国用户',
         avatar: htmlResult.userInfo?.avatar || undefined,
         detectionMethod: 'html',
+      };
+    }
+
+    // 情况4: API 明确返回未登录
+    if (apiResult.success && apiResult.loggedIn === false) {
+      logger.info('oschina', 'API 检测确认未登录');
+      return {
+        loggedIn: false,
+        platform: 'oschina',
+        errorType: AuthErrorType.LOGGED_OUT,
+        error: '需要登录',
+        retryable: false,
       };
     }
 
@@ -5783,11 +5889,11 @@ const mediumApi: PlatformApiConfig = {
       // 检查是否被重定向到登录页（未登录标志）
       if (finalUrl.includes('/m/signin') || finalUrl.includes('?signIn') || finalUrl.includes('/m/callback')) {
         logger.info('medium', '被重定向到登录页，判定为未登录');
-        return {
-          loggedIn: false,
-          platform: 'medium',
-          errorType: AuthErrorType.LOGGED_OUT,
-          error: '需要重新登录',
+      return {
+        loggedIn: false,
+        platform: 'medium',
+        errorType: AuthErrorType.LOGGED_OUT,
+        error: '需要重新登录',
           retryable: false,
           detectionMethod: 'html',
         };
@@ -5827,15 +5933,32 @@ const mediumApi: PlatformApiConfig = {
         };
       }
 
-      // 有 Cookie 但无法提取用户名，判定为未登录
-      // 这可以防止仅凭 session Cookie 就误判为已登录
-      logger.info('medium', '虽然检测到会话 Cookie，但无法提取用户名，判定为未登录');
+      const hasExplicitSignInUi =
+        /data-action=["']sign-in-prompt["']/i.test(html) ||
+        /href=["'][^"']*\/m\/signin/i.test(html) ||
+        />\s*sign in\s*</i.test(html);
+
+      const genericAvatar =
+        html.match(/<img[^>]+src=["'](https:\/\/miro\.medium\.com\/[^"']+)["']/i)?.[1] || undefined;
+
+      if (!hasExplicitSignInUi) {
+        logger.info('medium', '检测到会话 Cookie 且 /me/stats 未跳转登录页，保持已登录状态');
+        return {
+          loggedIn: true,
+          platform: 'medium',
+          avatar: genericAvatar,
+          detectionMethod: genericAvatar ? 'html' : 'cookie',
+        };
+      }
+
+      logger.info('medium', '检测到会话 Cookie，但页面出现显式登录提示，判定为未登录');
       return {
         loggedIn: false,
         platform: 'medium',
         errorType: AuthErrorType.LOGGED_OUT,
         error: '登录已过期',
         retryable: false,
+        detectionMethod: 'html',
       };
     } catch (e: any) {
       logger.warn('medium', '检测失败', { error: e.message });

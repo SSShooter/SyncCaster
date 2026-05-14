@@ -5,6 +5,7 @@ import { resolve } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { build } from 'esbuild';
 import manifest from './src/manifest';
+import { createDistManifest, getContentScriptBuildEntries } from './scripts/build-extension-manifest';
 
 // 插件：生成 manifest.json 和转换 content-scripts 为 IIFE
 function buildExtension() {
@@ -20,21 +21,21 @@ function buildExtension() {
 
       // 1. 生成 manifest.json
       console.log('Generating manifest.json...');
+      const distManifest = createDistManifest(manifest as any);
       writeFileSync(
         resolve(distDir, 'manifest.json'),
-        JSON.stringify(manifest, null, 2)
+        JSON.stringify(distManifest, null, 2)
       );
 
       // 2. 转换 content-scripts 为 IIFE
-      const contentScriptPath = resolve(__dirname, 'src/content-scripts/index.ts');
-      if (existsSync(contentScriptPath)) {
-        console.log('Building content-scripts.js as IIFE...');
+      for (const contentScript of getContentScriptBuildEntries(__dirname)) {
+        console.log(`Building ${contentScript.outputFile} as IIFE...`);
         await build({
-          entryPoints: [contentScriptPath],
+          entryPoints: [contentScript.entryPoint],
           bundle: true,
           format: 'iife',
-          globalName: 'ContentScript',
-          outfile: resolve(distDir, 'content-scripts.js'),
+          globalName: contentScript.globalName,
+          outfile: contentScript.outfile,
           platform: 'browser',
           target: 'es2020',
           minify: false,

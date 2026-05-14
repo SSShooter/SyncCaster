@@ -223,7 +223,7 @@ export const platformImageStrategies: Record<string, ImageUploadStrategy> = {
     mode: 'domPasteUpload',
     constraints: DEFAULT_CONSTRAINTS,
     domPasteConfig: {
-      editorUrl: 'https://my.oschina.net/blog/write',
+      editorUrl: 'https://my.oschina.net/blog/ai-write',
       editorSelector: '.ql-editor, .ProseMirror, [contenteditable="true"], .CodeMirror textarea',
       timeoutMs: 40000,
     },

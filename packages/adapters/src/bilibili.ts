@@ -1,11 +1,114 @@
 import type { PlatformAdapter } from './base';
-import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
+import { renderMarkdownToHtmlForPaste, replaceHtmlImagesWithPlaceholders, stripEmptyHtmlParagraphs } from '@synccaster/core';
+
+export interface BilibiliEditableCandidateMeta {
+  tagName?: string;
+  className?: string;
+  id?: string;
+  placeholder?: string;
+  ariaLabel?: string;
+  role?: string;
+  width?: number;
+  height?: number;
+  textLength?: number;
+}
+
+const bilibiliMetaHaystack = (meta: BilibiliEditableCandidateMeta) =>
+  [
+    meta.tagName,
+    meta.className,
+    meta.id,
+    meta.placeholder,
+    meta.ariaLabel,
+    meta.role,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+export function scoreBilibiliTitleCandidate(meta: BilibiliEditableCandidateMeta): number {
+  const haystack = bilibiliMetaHaystack(meta);
+  const tagName = String(meta.tagName || '').toLowerCase();
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+  let score = 0;
+
+  if (tagName === 'input' || tagName === 'textarea') score += 80;
+  if (tagName === 'h1' || tagName === 'h2') score += 40;
+  if (/标题|title|headline|article-title|title-input/.test(haystack)) score += 160;
+  if (/eva3|article-title|opus-title|head-input/.test(haystack)) score += 120;
+  if (/ql-editor|prosemirror|editor-body|write-content|rich-text|editor-container|eva3-web-editor|tiptap/.test(haystack)) score -= 220;
+  if (width > 220) score += 15;
+  if (height > 140) score -= 40;
+  if ((meta.textLength || 0) > 120) score -= 60;
+
+  return score;
+}
+
+export function scoreBilibiliEditorCandidate(meta: BilibiliEditableCandidateMeta): number {
+  const haystack = bilibiliMetaHaystack(meta);
+  const tagName = String(meta.tagName || '').toLowerCase();
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+  const area = width * height;
+  let score = 0;
+
+  if (/ql-editor/.test(haystack)) score += 240;
+  if (/prosemirror/.test(haystack)) score += 180;
+  if (/editor-container|eva3-web-editor|tiptap/.test(haystack)) score += 220;
+  if (/editor|content|rich|write|article/.test(haystack)) score += 60;
+  if (/title|标题|headline/.test(haystack)) score -= 220;
+  if (tagName === 'input' || tagName === 'textarea') score -= 260;
+  score += Math.min(180, Math.round(area / 3000));
+  score += Math.min(40, Math.round((meta.textLength || 0) / 40));
+
+  return score;
+}
+
+export function buildBilibiliImagePlaceholders(
+  html: string,
+  images: Array<{ url: string }>
+): {
+  html: string;
+  placeholders: Array<{ url: string; placeholder: string }>;
+} {
+  const placeholders = images
+    .filter((img) => !!img?.url)
+    .map((img, index) => ({
+      url: img.url,
+      placeholder: `[[SC_BILI_IMG_${index + 1}]]`,
+    }));
+
+  return {
+    html: replaceHtmlImagesWithPlaceholders(html || '', placeholders),
+    placeholders,
+  };
+}
+
+export function sanitizeBilibiliHtmlForPaste(
+  html: string,
+  images: Array<{ url: string }>
+): {
+  html: string;
+  placeholders: Array<{ url: string; placeholder: string }>;
+} {
+  const { html: nextHtml, placeholders } = buildBilibiliImagePlaceholders(html || '', images);
+  let sanitized = stripEmptyHtmlParagraphs(nextHtml || '');
+  for (const { placeholder } of placeholders) {
+    const escaped = placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    sanitized = sanitized.replace(new RegExp(`<p>\\s*${escaped}\\s*<\\/p>`, 'g'), `<p data-synccaster-image-placeholder="1">${placeholder}</p>`);
+  }
+  return {
+    html: sanitized,
+    placeholders,
+  };
+}
 
 /**
  * 哔哩哔哩专栏（Quill 富文本）
  *
  * 平台特点：
- * - 入口：https://member.bilibili.com/platform/upload/text/edit
+ * - 入口：https://member.bilibili.com/platform/upload/text/new-edit
  * - 编辑器：Quill 富文本编辑器，不支持 Markdown 识别
  * - 支持：HTML/富文本内容粘贴
  * - 图片：由 publish-engine 在站内粘贴上传，获得可发布的 URL 后替换进正文
@@ -65,9 +168,70 @@ export const bilibiliAdapter: PlatformAdapter = {
   },
 
   dom: {
-    matchers: ['https://member.bilibili.com/platform/upload/text/edit*'],
+    matchers: [
+      'https://member.bilibili.com/platform/upload/text/new-edit*',
+      'https://member.bilibili.com/platform/upload/text/edit*',
+    ],
+    getEditorUrl: () => 'https://member.bilibili.com/platform/upload/text/new-edit',
     fillAndPublish: async function (payload) {
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      const scoreTitleCandidateLocal = (meta: BilibiliEditableCandidateMeta): number => {
+        const haystack = [
+          meta.tagName,
+          meta.className,
+          meta.id,
+          meta.placeholder,
+          meta.ariaLabel,
+          meta.role,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        const tagName = String(meta.tagName || '').toLowerCase();
+        const width = meta.width || 0;
+        const height = meta.height || 0;
+        let score = 0;
+
+        if (tagName === 'input' || tagName === 'textarea') score += 80;
+        if (tagName === 'h1' || tagName === 'h2') score += 40;
+        if (/标题|title|headline|article-title|title-input/.test(haystack)) score += 160;
+        if (/eva3|article-title|opus-title|head-input/.test(haystack)) score += 120;
+        if (/ql-editor|prosemirror|editor-body|write-content|rich-text|editor-container|eva3-web-editor|tiptap/.test(haystack)) score -= 220;
+        if (width > 220) score += 15;
+        if (height > 140) score -= 40;
+        if ((meta.textLength || 0) > 120) score -= 60;
+
+        return score;
+      };
+      const scoreEditorCandidateLocal = (meta: BilibiliEditableCandidateMeta): number => {
+        const haystack = [
+          meta.tagName,
+          meta.className,
+          meta.id,
+          meta.placeholder,
+          meta.ariaLabel,
+          meta.role,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        const tagName = String(meta.tagName || '').toLowerCase();
+        const width = meta.width || 0;
+        const height = meta.height || 0;
+        const area = width * height;
+        let score = 0;
+
+        if (/ql-editor/.test(haystack)) score += 240;
+        if (/prosemirror/.test(haystack)) score += 180;
+        if (/editor-container|eva3-web-editor|tiptap/.test(haystack)) score += 220;
+        if (/editor|content|rich|write|article/.test(haystack)) score += 60;
+        if (/title|标题|headline/.test(haystack)) score -= 220;
+        if (tagName === 'input' || tagName === 'textarea') score -= 260;
+        score += Math.min(180, Math.round(area / 3000));
+        score += Math.min(40, Math.round((meta.textLength || 0) / 40));
+
+        return score;
+      };
 
       const isVisible = (el: Element) => {
         const he = el as HTMLElement;
@@ -92,24 +256,74 @@ export const bilibiliAdapter: PlatformAdapter = {
         return docs;
       };
 
-      const queryInAllDocs = (selector: string): HTMLElement | null => {
+      const collectInAllDocs = (selectors: string[]): HTMLElement[] => {
+        const seen = new Set<HTMLElement>();
+        const results: HTMLElement[] = [];
+        const normalizeEditableCandidate = (node: HTMLElement): HTMLElement => {
+          if (node.matches('input, textarea, [contenteditable="true"]')) return node;
+          return (node.querySelector('input, textarea, [contenteditable="true"]') as HTMLElement | null) || node;
+        };
         for (const doc of getAllDocs()) {
-          const el = doc.querySelector(selector) as HTMLElement | null;
-          if (el && isVisible(el)) return el;
+          for (const selector of selectors) {
+            const elements = Array.from(doc.querySelectorAll(selector)) as HTMLElement[];
+            for (const el of elements) {
+              const normalized = normalizeEditableCandidate(el);
+              if (!normalized || seen.has(normalized) || !isVisible(normalized)) continue;
+              seen.add(normalized);
+              results.push(normalized);
+            }
+          }
         }
-        return null;
+        return results;
       };
 
-      const waitForAny = async (selectors: string[], timeoutMs = 30000): Promise<HTMLElement> => {
+      const buildMeta = (el: HTMLElement): BilibiliEditableCandidateMeta => {
+        const rect = el.getBoundingClientRect();
+        return {
+          tagName: el.tagName,
+          className: el.className || '',
+          id: el.id || '',
+          placeholder:
+            (el as HTMLInputElement).placeholder ||
+            el.getAttribute('data-placeholder') ||
+            '',
+          ariaLabel: el.getAttribute('aria-label') || '',
+          role: el.getAttribute('role') || '',
+          width: rect.width,
+          height: rect.height,
+          textLength: (el.textContent || '').trim().length,
+        };
+      };
+
+      const pickBestCandidate = (
+        elements: HTMLElement[],
+        scorer: (el: HTMLElement, meta: BilibiliEditableCandidateMeta) => number,
+        minScore = 1
+      ): HTMLElement | null => {
+        let best: { el: HTMLElement; score: number } | null = null;
+        for (const el of elements) {
+          const score = scorer(el, buildMeta(el));
+          if (!best || score > best.score) {
+            best = { el, score };
+          }
+        }
+        return best && best.score >= minScore ? best.el : null;
+      };
+
+      const waitForBestCandidate = async (
+        selectors: string[],
+        scorer: (el: HTMLElement, meta: BilibiliEditableCandidateMeta) => number,
+        label: string,
+        timeoutMs = 30000,
+        minScore = 1
+      ): Promise<HTMLElement> => {
         const start = Date.now();
         while (Date.now() - start < timeoutMs) {
-          for (const sel of selectors) {
-            const el = queryInAllDocs(sel);
-            if (el) return el;
-          }
+          const candidate = pickBestCandidate(collectInAllDocs(selectors), scorer, minScore);
+          if (candidate) return candidate;
           await sleep(200);
         }
-        throw new Error(`等待元素超时: ${selectors.join(', ')}`);
+        throw new Error(`等待 ${label} 超时`);
       };
 
       const setNativeValue = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => {
@@ -124,6 +338,10 @@ export const bilibiliAdapter: PlatformAdapter = {
 
       const clearEditor = (editor: HTMLElement, quill: any | null) => {
         try {
+          if (quill?.setContents) {
+            quill.setContents([]);
+            return;
+          }
           if (quill?.setText) {
             quill.setText('');
             return;
@@ -141,6 +359,48 @@ export const bilibiliAdapter: PlatformAdapter = {
           (editor as any).__quill ||
           ((editor.closest('.ql-container') as any)?.__quill ?? null)
         );
+      };
+
+      const extractPlainText = (html: string) => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html || '', 'text/html');
+        return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
+      };
+
+      const getEditorState = (editor: HTMLElement) => ({
+        textLength: ((editor.innerText || editor.textContent || '').replace(/\s+/g, ' ').trim() || '').length,
+        imageCount: editor.querySelectorAll('img').length,
+      });
+
+      const isEditorFilledEnough = (
+        editor: HTMLElement,
+        expectedTextLength: number,
+        expectedImageCount: number
+      ) => {
+        const { textLength, imageCount } = getEditorState(editor);
+        const requiredText =
+          expectedTextLength <= 0
+            ? 0
+            : expectedTextLength < 16
+              ? Math.max(1, expectedTextLength - 2)
+              : Math.floor(expectedTextLength * 0.72);
+        const textOk = expectedTextLength === 0 || textLength >= requiredText;
+        const imageOk = expectedImageCount === 0 || imageCount >= Math.min(1, expectedImageCount);
+        return textOk && imageOk;
+      };
+
+      const clearContentEditable = (editor: HTMLElement) => {
+        try {
+          editor.focus();
+          const selection = editor.ownerDocument.defaultView?.getSelection() || window.getSelection();
+          selection?.removeAllRanges();
+          const range = editor.ownerDocument.createRange();
+          range.selectNodeContents(editor);
+          selection?.addRange(range);
+          editor.ownerDocument.execCommand?.('delete', false);
+        } catch {}
+        editor.innerHTML = '';
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
       };
 
 
@@ -227,6 +487,15 @@ export const bilibiliAdapter: PlatformAdapter = {
         return doc.body.innerHTML;
       };
 
+      const applyDirectHtml = (editor: HTMLElement, quill: any | null, html: string) => {
+        clearEditor(editor, quill);
+        clearContentEditable(editor);
+        editor.innerHTML = html;
+        editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste' }));
+        editor.dispatchEvent(new Event('change', { bubbles: true }));
+        quill?.update?.('user');
+      };
+
       const pasteHtml = async (editor: HTMLElement, quill: any | null, html: string, fallbackText: string) => {
         const doc = editor.ownerDocument;
         const win = doc.defaultView || window;
@@ -235,6 +504,7 @@ export const bilibiliAdapter: PlatformAdapter = {
         try {
           if (quill?.clipboard?.dangerouslyPasteHTML) {
             clearEditor(editor, quill);
+            clearContentEditable(editor);
             // 大内容在部分站点会被 Quill/clipboard 截断：拆分为块按顺序写入
             const parsed = new win.DOMParser().parseFromString(html || '', 'text/html');
             const nodes = Array.from(parsed.body.childNodes)
@@ -285,13 +555,103 @@ export const bilibiliAdapter: PlatformAdapter = {
           editor.focus();
           const ok = doc.execCommand?.('insertHTML', false, html);
           if (!ok) {
-            editor.innerHTML = html;
-            editor.dispatchEvent(new Event('input', { bubbles: true }));
+            applyDirectHtml(editor, quill, html);
+          } else {
+            editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste' }));
+            editor.dispatchEvent(new Event('change', { bubbles: true }));
           }
         } catch {
-          editor.innerHTML = html;
-          editor.dispatchEvent(new Event('input', { bubbles: true }));
+          applyDirectHtml(editor, quill, html);
         }
+      };
+
+      const setContentEditableValue = (el: HTMLElement, value: string) => {
+        try {
+          el.focus();
+          const doc = el.ownerDocument;
+          const selection = doc.defaultView?.getSelection() || window.getSelection();
+          selection?.removeAllRanges();
+          const range = doc.createRange();
+          range.selectNodeContents(el);
+          selection?.addRange(range);
+          doc.execCommand?.('delete', false);
+          const inserted = doc.execCommand?.('insertText', false, value);
+          if (!inserted) {
+            el.textContent = value;
+          }
+        } catch {
+          el.textContent = value;
+        }
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      };
+
+      const replaceHtmlImagesWithPlaceholdersLocal = (
+        rawHtml: string,
+        replacements: Array<{ url: string; placeholder: string }>
+      ): string => {
+        if (!rawHtml || replacements.length === 0) return rawHtml || '';
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(rawHtml || '', 'text/html');
+        const buildUrlVariantsLocal = (url: string): string[] => {
+          const raw = String(url || '').trim();
+          if (!raw) return [];
+          const variants = new Set<string>([raw]);
+          variants.add(raw.replace(/^https?:\/\//i, '//'));
+          variants.add(raw.replace(/^https:\/\//i, 'http://'));
+          variants.add(raw.replace(/^http:\/\//i, 'https://'));
+          return Array.from(variants).filter(Boolean);
+        };
+        const placeholderMap = new Map<string, string>();
+        for (const { url, placeholder } of replacements) {
+          for (const variant of buildUrlVariantsLocal(url)) {
+            placeholderMap.set(variant, placeholder);
+          }
+        }
+        doc.querySelectorAll('img').forEach((img) => {
+          const src = img.getAttribute('src') || '';
+          const placeholder = placeholderMap.get(src);
+          if (!placeholder) return;
+          const anchor = img.closest('a');
+          const replacementNode = doc.createTextNode(placeholder);
+          if (anchor && anchor.childNodes.length === 1) {
+            anchor.replaceWith(replacementNode);
+            return;
+          }
+          img.replaceWith(replacementNode);
+        });
+        return doc.body.innerHTML;
+      };
+      const sanitizeHtmlForPasteLocal = (
+        rawHtml: string,
+        images: Array<{ url: string }>
+      ): {
+        html: string;
+        placeholders: Array<{ url: string; placeholder: string }>;
+      } => {
+        const placeholders = images
+          .filter((img) => !!img?.url)
+          .map((img, index) => ({
+            url: img.url,
+            placeholder: `[[SC_BILI_IMG_${index + 1}]]`,
+          }));
+
+        let sanitized = replaceHtmlImagesWithPlaceholdersLocal(rawHtml || '', placeholders);
+        sanitized = sanitized.replace(/<p>(?:\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, '');
+
+        for (const { placeholder } of placeholders) {
+          const escaped = placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          sanitized = sanitized.replace(
+            new RegExp(`<p>\\s*${escaped}\\s*<\\/p>`, 'g'),
+            `<p data-synccaster-image-placeholder="1">${placeholder}</p>`
+          );
+        }
+
+        return {
+          html: sanitized,
+          placeholders,
+        };
       };
 
       try {
@@ -308,19 +668,48 @@ export const bilibiliAdapter: PlatformAdapter = {
         }
         
         // 1) 定位标题与编辑器
-        const titleField = await waitForAny(
+        const titleField = await waitForBestCandidate(
           [
             'textarea[placeholder*="标题"]',
             'input[placeholder*="标题"]',
+            '.opus-module-title textarea',
+            '.opus-module-title input',
+            '.opus-module-title [contenteditable="true"]',
             '.title-input textarea',
             '.title-input input',
+            '.title-input [contenteditable="true"]',
+            '.article-title [contenteditable="true"]',
+            '.head-input [contenteditable="true"]',
+            '[data-placeholder*="标题"]',
+            '[aria-label*="标题"]',
+            'h1[contenteditable="true"]',
             'textarea[name*="title"]',
             'input[name*="title"]',
           ],
+          (_el, meta) => scoreTitleCandidateLocal(meta),
+          '标题输入框',
           25000
         );
 
-        const editor = await waitForAny(['.ql-editor', '.ProseMirror', '[contenteditable="true"]'], 25000);
+        const editor = await waitForBestCandidate(
+          [
+            '.editor-container .tiptap.ProseMirror',
+            '.editor-container .ProseMirror',
+            '.eva3-web-editor .ProseMirror',
+            '.ql-editor',
+            '.ProseMirror',
+            '.editor-container [role="textbox"][contenteditable="true"]',
+            '[role="textbox"][contenteditable="true"]',
+          ],
+          (el, meta) => {
+            const base = scoreEditorCandidateLocal(meta);
+            if (titleField && el === titleField) return -999;
+            return base;
+          },
+          '正文编辑器',
+          25000,
+          40
+        );
         const quill = getQuill(editor);
 
         // 2) 填充标题
@@ -328,8 +717,14 @@ export const bilibiliAdapter: PlatformAdapter = {
         if (titleField instanceof HTMLInputElement || titleField instanceof HTMLTextAreaElement) {
           setNativeValue(titleField, title);
         } else {
-          titleField.textContent = title;
-          titleField.dispatchEvent(new Event('input', { bubbles: true }));
+          setContentEditableValue(titleField, title);
+        }
+        const titleValue =
+          titleField instanceof HTMLInputElement || titleField instanceof HTMLTextAreaElement
+            ? titleField.value
+            : titleField.textContent || '';
+        if (title && titleValue.trim().length < Math.max(1, Math.floor(title.trim().length * 0.75))) {
+          throw new Error('哔哩哔哩标题未能成功填充');
         }
         console.log('[bilibili] Title filled:', title);
 
@@ -349,32 +744,50 @@ export const bilibiliAdapter: PlatformAdapter = {
 
         // 4) 正文写入（HTML -> Quill）
         console.log('[bilibili] Filling content with HTML (length:', html.length, ')');
-        const normalizedHtml = normalizeHtmlForQuill(html);
-        const fallbackText = markdownOriginal || '';
-        await pasteHtml(editor, quill, normalizedHtml, fallbackText);
-        await sleep(500);
-        
-        // 简单校验：避免 paste 发生截断
-        const expected = (fallbackText || '').trim().length;
-        const actual = ((editor.innerText || editor.textContent || '').trim() || '').length;
-        if (expected > 0 && actual > 0 && actual < expected * 0.85) {
-          console.log('[bilibili] Content may be truncated, retrying paste...');
-          await pasteHtml(editor, quill, normalizedHtml, fallbackText);
+        const sanitized = sanitizeHtmlForPasteLocal(
+          html,
+          downloadedImages.filter((img: any) => !!img?.url).map((img: any) => ({ url: img.url }))
+        );
+        const placeholderMappings = sanitized.placeholders;
+        const normalizedHtml = normalizeHtmlForQuill(sanitized.html);
+        const fallbackText = extractPlainText(normalizedHtml) || markdownOriginal || '';
+        const expectedTextLength = fallbackText.trim().length;
+        const expectedImageCount = 0;
+
+        const fillStrategies = [
+          async () => pasteHtml(editor, quill, normalizedHtml, fallbackText),
+          async () => {
+            applyDirectHtml(editor, quill, normalizedHtml);
+            await sleep(300);
+          },
+          async () => {
+            clearEditor(editor, quill);
+            clearContentEditable(editor);
+            editor.focus();
+            editor.ownerDocument.execCommand?.('insertText', false, fallbackText);
+            editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: fallbackText }));
+            quill?.update?.('user');
+            await sleep(250);
+          },
+        ];
+
+        let bodyFilled = false;
+        for (const strategy of fillStrategies) {
+          await strategy();
+          await sleep(500);
+          if (isEditorFilledEnough(editor, expectedTextLength, expectedImageCount)) {
+            bodyFilled = true;
+            break;
+          }
+        }
+
+        if (!bodyFilled) {
+          const state = getEditorState(editor);
+          throw new Error(`哔哩哔哩正文填充失败，实际文本长度 ${state.textLength}，预期 ${expectedTextLength}`);
         }
 
         // 5) 检查是否有外链图片（B 站不支持外链图片显示）
-        const imgElements = editor.querySelectorAll('img');
-        const externalImages: string[] = [];
-        imgElements.forEach((img) => {
-          const src = img.getAttribute('src') || '';
-          // B 站自己的图片域名
-          const isBilibiliImage = /^https?:\/\/[^/]*\.hdslb\.com\//i.test(src) || 
-                                   /^https?:\/\/[^/]*\.bilivideo\.com\//i.test(src) ||
-                                   /^https?:\/\/i[0-9]*\.hdslb\.com\//i.test(src);
-          if (src && !isBilibiliImage && !src.startsWith('data:') && !src.startsWith('blob:')) {
-            externalImages.push(src);
-          }
-        });
+        const externalImages = placeholderMappings.map((item) => item.url);
         
         if (externalImages.length > 0) {
           console.warn('[bilibili] ⚠️ 检测到', externalImages.length, '张外链图片，B 站可能无法显示');
@@ -394,6 +807,7 @@ export const bilibiliAdapter: PlatformAdapter = {
           url: window.location.href,
           __synccasterNote: note,
           __externalImages: externalImages,
+          __imagePlaceholders: placeholderMappings,
         };
       } catch (error: any) {
         console.error('[bilibili] Fill failed:', error);

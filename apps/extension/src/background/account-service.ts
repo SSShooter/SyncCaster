@@ -113,8 +113,8 @@ const PLATFORMS: Record<string, PlatformConfig> = {
     id: 'tencent-cloud',
     name: '腾讯云开发者社区',
     loginUrl: 'https://cloud.tencent.com/login',
-    // /developer/user 会在登录后进入个人主页（更容易提取昵称/头像）
-    homeUrl: 'https://cloud.tencent.com/developer/user',
+    // 创作中心页稳定包含当前登录用户资料，避免 /developer/user 落到错误主页
+    homeUrl: 'https://cloud.tencent.com/developer/creator',
     urlPattern: /cloud\.tencent\.com/,
   },
   aliyun: {
@@ -143,8 +143,9 @@ const PLATFORMS: Record<string, PlatformConfig> = {
   oschina: {
     id: 'oschina',
     name: '开源中国',
-    loginUrl: 'https://www.oschina.net/home/login',
-    homeUrl: 'https://www.oschina.net/',
+    // 使用 my.oschina.net 作为认证入口，登录后会稳定跳转到当前账号的个人中心 /u/{id}
+    loginUrl: 'https://my.oschina.net/',
+    homeUrl: 'https://my.oschina.net/',
     urlPattern: /oschina\.net/,
   },
   toutiao: {
@@ -307,6 +308,7 @@ async function findPlatformTab(platform: string): Promise<chrome.tabs.Tab | null
 }
 
 const PROFILE_ENRICH_PLATFORMS = new Set(['wechat', 'tencent-cloud', 'jianshu', 'csdn', '51cto', 'segmentfault', 'oschina']);
+const PRESERVE_ACTIVE_WITH_COOKIE_EVIDENCE_PLATFORMS = new Set(['segmentfault', 'tencent-cloud', 'medium']);
 const GENERIC_NICKNAMES: Record<string, string[]> = {
   wechat: ['微信公众号'],
   'tencent-cloud': ['腾讯云用户'],
@@ -374,6 +376,97 @@ function extractUserIdFromAccountId(account: Account): string | undefined {
   return undefined;
 }
 
+function extractOschinaUserIdFromUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  const match = url.match(/my\.oschina\.net\/u\/(\d+)/i) || url.match(/\/u\/(\d+)/i);
+  return match?.[1];
+}
+
+function loginStateFromUserInfo(platform: string, userInfo: UserInfo): LoginState {
+  return {
+    loggedIn: !!userInfo.loggedIn,
+    platform,
+    userId: userInfo.userId,
+    nickname: userInfo.nickname,
+    avatar: userInfo.avatar,
+    error: userInfo.error,
+    meta: userInfo.meta,
+  };
+}
+
+async function detectInteractiveLoginState(
+  platform: string,
+  tabId: number,
+  useDirectApi: boolean
+): Promise<LoginState> {
+  if (!useDirectApi) {
+    return checkLoginInTab(tabId);
+  }
+
+  if (platform === 'oschina') {
+    let backgroundInfo: UserInfo | null = null;
+    try {
+      backgroundInfo = await fetchPlatformUserInfo(platform);
+      if (backgroundInfo.loggedIn) {
+        return loginStateFromUserInfo(platform, backgroundInfo);
+      }
+    } catch (e: any) {
+      logger.debug('interactive-login', '开源中国 background 检测失败，继续使用 tab 侧证据', {
+        error: e?.message || String(e),
+      });
+    }
+
+    let tabState: LoginState = { loggedIn: false, platform };
+    try {
+      tabState = await checkLoginInTab(tabId);
+      if (tabState.loggedIn) {
+        return tabState;
+      }
+    } catch (e: any) {
+      logger.debug('interactive-login', '开源中国 tab 检测失败', {
+        error: e?.message || String(e),
+      });
+    }
+
+    const tab = await chrome.tabs.get(tabId);
+    const urlUserId = extractOschinaUserIdFromUrl(tab.url);
+    const hasLocalProfileEvidence = !!(tabState.userId || tabState.nickname || tabState.avatar);
+    const backgroundAllowsFallback =
+      !backgroundInfo ||
+      (backgroundInfo.errorType !== AuthErrorType.LOGGED_OUT && backgroundInfo.retryable !== false);
+
+    if (urlUserId && hasLocalProfileEvidence && backgroundAllowsFallback) {
+      return {
+        loggedIn: true,
+        platform,
+        userId: backgroundInfo?.userId || tabState.userId || urlUserId,
+        nickname: pickBetterNickname(platform, tabState.nickname || '开源中国用户', backgroundInfo?.nickname),
+        avatar: pickBetterAvatar(tabState.avatar, backgroundInfo?.avatar),
+        meta: {
+          ...(tabState.meta || {}),
+          ...(backgroundInfo?.meta || {}),
+        },
+      };
+    }
+
+    if (backgroundInfo) {
+      return loginStateFromUserInfo(platform, backgroundInfo);
+    }
+
+    return tabState;
+  }
+
+  if (tabId && ['segmentfault', 'csdn'].includes(platform)) {
+    const state = await checkLoginInTab(tabId);
+    if (state.loggedIn) {
+      return state;
+    }
+  }
+
+  const userInfo = await fetchPlatformUserInfo(platform);
+  return loginStateFromUserInfo(platform, userInfo);
+}
+
 function isCsdnFallbackUserId(value: string): boolean {
   const v = value.trim();
   return /^csdn_\d{10,}$/i.test(v) || /^\d{10,}$/.test(v);
@@ -394,6 +487,60 @@ function extractCsdnUserIdFromAvatarUrl(url?: string): string | undefined {
   if (!candidate) return undefined;
   if (candidate.toLowerCase().includes('default') || candidate.toLowerCase().includes('placeholder')) return undefined;
   return candidate;
+}
+
+function getStablePlatformUserId(userId?: string, fallback = 'default'): string {
+  const cleaned = String(userId || '').trim();
+  return cleaned || fallback;
+}
+
+function getCanonicalProfileId(platform: string, userId?: string): string | undefined {
+  const cleaned = String(userId || '').trim();
+  if (!cleaned || cleaned === 'default' || cleaned === 'undefined' || cleaned === 'null') return undefined;
+
+  if (platform === 'segmentfault') {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,49}$/.test(cleaned)) return undefined;
+    if (/^\d+$/.test(cleaned)) return undefined;
+    if (cleaned.startsWith('segmentfault_')) return undefined;
+    return cleaned;
+  }
+
+  if (platform === 'jianshu') {
+    if (/^\d+$/.test(cleaned)) return undefined;
+    if (cleaned.startsWith('jianshu_')) return undefined;
+    return cleaned;
+  }
+
+  if (platform === 'oschina' || platform === '51cto' || platform === 'tencent-cloud') {
+    return /^\d{1,24}$/.test(cleaned) ? cleaned : undefined;
+  }
+
+  return cleaned;
+}
+
+function mergeAccountMeta(
+  platform: string,
+  existingMeta?: Record<string, any>,
+  nextMeta?: Record<string, any>,
+  userId?: string
+): Record<string, any> {
+  const merged = {
+    ...(existingMeta || {}),
+    ...(nextMeta || {}),
+  };
+
+  const canonicalProfileId =
+    getCanonicalProfileId(platform, nextMeta?.profileId) ||
+    getCanonicalProfileId(platform, userId) ||
+    getCanonicalProfileId(platform, existingMeta?.profileId);
+
+  if (canonicalProfileId) {
+    merged.profileId = canonicalProfileId;
+  } else if (['segmentfault', 'jianshu', 'oschina', '51cto', 'tencent-cloud'].includes(platform)) {
+    delete merged.profileId;
+  }
+
+  return merged;
 }
 
 
@@ -492,6 +639,14 @@ export class AccountService {
       return 'https://my.oschina.net/';
     }
 
+    if (account.platform === 'tencent-cloud') {
+      const uid = String((account.meta as any)?.profileId || extractUserIdFromAccountId(account) || '').trim();
+      if (uid && /^\d+$/.test(uid)) {
+        return `https://cloud.tencent.com/developer/user/${uid}`;
+      }
+      return 'https://cloud.tencent.com/developer/creator';
+    }
+
     return config.homeUrl;
   }
 
@@ -540,6 +695,39 @@ export class AccountService {
     // 无感要求：禁止在账号检测/绑定流程中通过 chrome.tabs.create 打开任何额外页面来“补全资料”。
     // 昵称/头像应尽量通过 background API/Cookie/HTML 探针完成（不打开标签页）。
     return account;
+  }
+
+  private static async tryPreserveActiveAccountWithCookieEvidence(
+    scope: 'refresh-account' | 'refresh-all',
+    account: Account,
+    userInfo: UserInfo,
+    now: number
+  ): Promise<Account | null> {
+    const isRetryable = userInfo.retryable === true && userInfo.errorType !== AuthErrorType.LOGGED_OUT;
+    if (!isRetryable) return null;
+    if (!PRESERVE_ACTIVE_WITH_COOKIE_EVIDENCE_PLATFORMS.has(account.platform)) return null;
+    if (account.status !== AccountStatus.ACTIVE) return null;
+
+    const cookieInfo = await getPlatformCookieExpiration(account.platform);
+    if (!cookieInfo.hasValidCookies) return null;
+
+    const updated: Account = {
+      ...account,
+      updatedAt: now,
+      lastCheckAt: now,
+      lastError: `[临时][cookie] ${userInfo.error || '资料提取失败'}`,
+      cookieExpiresAt: cookieInfo.cookieExpiresAt || account.cookieExpiresAt,
+    };
+
+    await db.accounts.put(updated);
+    logger.info(scope, '资料提取失败但 Cookie 仍有效，保持 ACTIVE', {
+      platform: account.platform,
+      detectionMethod: userInfo.detectionMethod,
+      errorType: userInfo.errorType,
+      cookieExpiresAt: cookieInfo.cookieExpiresAt,
+    });
+
+    return updated;
   }
   
   /**
@@ -651,11 +839,14 @@ export class AccountService {
         if (userInfo.loggedIn) {
           logger.info('add-account', '通过 API 检测到已登录，直接保存账号');
           const account = await this.saveAccount(platform, {
-            userId: userInfo.userId || `${platform}_${Date.now()}`,
+            userId: getStablePlatformUserId(userInfo.userId),
             nickname: userInfo.nickname || platformName + '用户',
             avatar: userInfo.avatar,
             platform,
-          }, userInfo.meta);
+          }, {
+            ...(userInfo.meta || {}),
+            ...(userInfo.userId ? { profileId: userInfo.userId } : {}),
+          });
           return await this.maybeEnrichAccountProfile(account);
         }
       } catch (e: any) {
@@ -669,11 +860,14 @@ export class AccountService {
         if (state.loggedIn) {
           logger.info('add-account', '检测到已登录，直接保存账号');
           const account = await this.saveAccount(platform, {
-            userId: state.userId || `${platform}_${Date.now()}`,
+            userId: getStablePlatformUserId(state.userId),
             nickname: state.nickname || platformName + '用户',
             avatar: state.avatar,
             platform,
-          }, state.meta);
+          }, {
+            ...(state.meta || {}),
+            ...(state.userId ? { profileId: state.userId } : {}),
+          });
           return await this.maybeEnrichAccountProfile(account);
         }
       }
@@ -719,7 +913,7 @@ export class AccountService {
 
           const mergedNickname = pickBetterNickname(platform, state.nickname || platformName + '用户', bgUserInfo?.nickname);
           const mergedAvatar = pickBetterAvatar(state.avatar, bgUserInfo?.avatar);
-          const mergedUserId = bgUserInfo?.userId || state.userId || `${platform}_${Date.now()}`;
+          const mergedUserId = getStablePlatformUserId(bgUserInfo?.userId || state.userId);
 
           const account = await this.saveAccount(platform, {
             userId: mergedUserId,
@@ -729,6 +923,8 @@ export class AccountService {
           }, {
             ...(state.meta || {}),
             ...(bgUserInfo?.meta || {}),
+            ...(bgUserInfo?.userId ? { profileId: bgUserInfo.userId } : {}),
+            ...(state.userId ? { profileId: state.userId } : {}),
           });
 
           // 关闭登录标签页
@@ -769,39 +965,17 @@ export class AccountService {
           let meta: any;
           
           // 优先使用直接 API 检测（更快，不依赖页面加载状态）
-          if (useDirectApi) {
-            if (tabId && ['segmentfault', 'oschina', 'csdn'].includes(platform)) {
-              const state = await checkLoginInTab(tabId);
-              if (state.loggedIn) {
-                loggedIn = true;
-                userId = state.userId;
-                nickname = state.nickname;
-                avatar = state.avatar;
-                meta = state.meta;
-                logger.info('add-account', 'Tab 检测到登录成功', { userId, nickname });
-              }
-            }
-
-            if (!loggedIn) {
-              const userInfo = await fetchPlatformUserInfo(platform);
-              if (userInfo.loggedIn) {
-                loggedIn = true;
-                userId = userInfo.userId;
-                nickname = userInfo.nickname;
-                avatar = userInfo.avatar;
-                meta = userInfo.meta;
-                logger.info('add-account', 'API 检测到登录成功', { userId, nickname });
-              }
-            }
-          } else {
-            // 回退：使用 content script 检测
-            const state = await checkLoginInTab(tabId);
+          {
+            const state = await detectInteractiveLoginState(platform, tabId, useDirectApi);
             if (state.loggedIn) {
               loggedIn = true;
               userId = state.userId;
               nickname = state.nickname;
               avatar = state.avatar;
               meta = state.meta;
+              logger.info('add-account', `${platform} 检测到登录成功`, { userId, nickname });
+            } else if (state.error) {
+              logger.debug('add-account', `${platform} 检测仍未确认登录`, { error: state.error });
             }
           }
           
@@ -820,7 +994,7 @@ export class AccountService {
 
             const mergedNickname = pickBetterNickname(platform, nickname || platformName + '用户', bgUserInfo?.nickname);
             const mergedAvatar = pickBetterAvatar(avatar, bgUserInfo?.avatar);
-            const mergedUserId = bgUserInfo?.userId || userId || `${platform}_${Date.now()}`;
+            const mergedUserId = getStablePlatformUserId(bgUserInfo?.userId || userId);
 
             const account = await this.saveAccount(platform, {
               userId: mergedUserId,
@@ -830,6 +1004,8 @@ export class AccountService {
             }, {
               ...(meta || {}),
               ...(bgUserInfo?.meta || {}),
+              ...(bgUserInfo?.userId ? { profileId: bgUserInfo.userId } : {}),
+              ...(userId ? { profileId: userId } : {}),
             });
 
             // 关闭登录标签页
@@ -876,17 +1052,18 @@ export class AccountService {
     const now = Date.now();
 
     const cleanedNickname = String(userInfo.nickname || '').trim();
-    const cleanedUserId = String(userInfo.userId || '').trim();
+    const stableUserId = getStablePlatformUserId(userInfo.userId);
+    const canonicalProfileId = getCanonicalProfileId(platform, stableUserId) || getCanonicalProfileId(platform, (meta as any)?.profileId);
     let nickname = cleanedNickname;
 
     if (platform === 'segmentfault' && isGenericNickname(platform, nickname)) {
       if (
-        cleanedUserId &&
-        /^[a-zA-Z0-9][a-zA-Z0-9_-]{1,49}$/.test(cleanedUserId) &&
-        !cleanedUserId.startsWith('segmentfault_') &&
-        !/^\d+$/.test(cleanedUserId)
+        canonicalProfileId &&
+        /^[a-zA-Z0-9][a-zA-Z0-9_-]{1,49}$/.test(canonicalProfileId) &&
+        !canonicalProfileId.startsWith('segmentfault_') &&
+        !/^\d+$/.test(canonicalProfileId)
       ) {
-        nickname = cleanedUserId;
+        nickname = canonicalProfileId;
       }
     }
 
@@ -903,25 +1080,25 @@ export class AccountService {
       }
     }
 
-    const id = existing?.id || `${platform}-${cleanedUserId || 'default'}`;
+    const id = existing?.id || `${platform}-${stableUserId}`;
+    const mergedNickname = pickBetterNickname(platform, existing?.nickname || nickname || `${PLATFORM_NAMES[platform] || platform}用户`, nickname);
+    const mergedAvatar = pickBetterAvatar(existing?.avatar, userInfo.avatar);
+    const mergedMeta = mergeAccountMeta(platform, existing?.meta as any, meta as any, stableUserId);
 
     const account: Account = {
       id,
       platform: platform as any,
-      nickname,
-      avatar: userInfo.avatar,
+      nickname: mergedNickname,
+      avatar: mergedAvatar,
       enabled: true,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
-      meta: {
-        ...(existing?.meta || {}),
-        ...(meta || {}),
-        ...(platform === 'segmentfault' && cleanedUserId ? { profileId: cleanedUserId } : {}),
-      },
+      meta: mergedMeta,
       status: AccountStatus.ACTIVE,
       lastCheckAt: now,
       consecutiveFailures: 0,
       lastError: undefined,
+      cookieExpiresAt: existing?.cookieExpiresAt,
     };
 
     await db.accounts.put(account);
@@ -1137,15 +1314,12 @@ export class AccountService {
           nickname: pickBetterNickname(account.platform, account.nickname, userInfo.nickname),
           avatar: pickBetterAvatar(account.avatar, userInfo.avatar),
           updatedAt: now,
-          meta: {
-            ...(account.meta || {}),
-            ...(userInfo.meta || {}),
-            ...(userInfo.userId ? { profileId: userInfo.userId } : {}),
-          },
+          meta: mergeAccountMeta(account.platform, account.meta as any, userInfo.meta as any, userInfo.userId),
           status: AccountStatus.ACTIVE,
           lastCheckAt: now,
           lastError: undefined,
           consecutiveFailures: 0,
+          cookieExpiresAt: userInfo.cookieExpiresAt || account.cookieExpiresAt,
         };
         
         await db.accounts.put(updated);
@@ -1191,6 +1365,16 @@ export class AccountService {
 
         await db.accounts.put(updated);
         return updated;
+      }
+
+      const preservedByCookieEvidence = await this.tryPreserveActiveAccountWithCookieEvidence(
+        'refresh-account',
+        account,
+        userInfo,
+        now
+      );
+      if (preservedByCookieEvidence) {
+        return preservedByCookieEvidence;
       }
       
       // 新登录保护：如果在保护期内且错误可重试，保持 ACTIVE 状态
@@ -1301,11 +1485,7 @@ export class AccountService {
         nickname: pickBetterNickname(account.platform, account.nickname, state.nickname),
         avatar: pickBetterAvatar(account.avatar, state.avatar),
         updatedAt: now,
-        meta: {
-          ...(account.meta || {}),
-          ...(state.meta || {}),
-          ...(state.userId ? { profileId: state.userId } : {}),
-        },
+        meta: mergeAccountMeta(account.platform, account.meta as any, state.meta as any, state.userId),
         status: AccountStatus.ACTIVE,
         lastCheckAt: now,
         lastError: undefined,
@@ -1380,15 +1560,12 @@ export class AccountService {
             nickname: pickBetterNickname(account.platform, account.nickname, userInfo.nickname),
             avatar: pickBetterAvatar(account.avatar, userInfo.avatar),
             updatedAt: now,
-            meta: {
-              ...(account.meta || {}),
-              ...(userInfo.meta || {}),
-              ...(userInfo.userId ? { profileId: userInfo.userId } : {}),
-            },
+            meta: mergeAccountMeta(account.platform, account.meta as any, userInfo.meta as any, userInfo.userId),
             status: AccountStatus.ACTIVE,
             lastCheckAt: now,
             lastError: undefined,
             consecutiveFailures: 0,
+            cookieExpiresAt: userInfo.cookieExpiresAt || account.cookieExpiresAt,
           };
           
           await db.accounts.put(updated);
@@ -1432,6 +1609,17 @@ export class AccountService {
 
             await db.accounts.put(updated);
             success.push(updated);
+            continue;
+          }
+
+          const preservedByCookieEvidence = await this.tryPreserveActiveAccountWithCookieEvidence(
+            'refresh-all',
+            account,
+            userInfo,
+            now
+          );
+          if (preservedByCookieEvidence) {
+            success.push(preservedByCookieEvidence);
             continue;
           }
           
@@ -1568,11 +1756,7 @@ export class AccountService {
              nickname: pickBetterNickname(account.platform, account.nickname, state.nickname),
              avatar: pickBetterAvatar(account.avatar, state.avatar),
              updatedAt: now,
-             meta: {
-               ...(account.meta || {}),
-               ...(state.meta || {}),
-              ...(state.userId ? { profileId: state.userId } : {}),
-            },
+             meta: mergeAccountMeta(account.platform, account.meta as any, state.meta as any, state.userId),
             status: AccountStatus.ACTIVE,
             lastCheckAt: now,
             lastError: undefined,
@@ -1621,25 +1805,17 @@ export class AccountService {
           let meta: any;
           
           // 优先使用直接 API 检测（更快，不依赖页面加载状态）
-          if (useDirectApi) {
-            const userInfo = await fetchPlatformUserInfo(account.platform);
-            if (userInfo.loggedIn) {
-              loggedIn = true;
-              userId = userInfo.userId;
-              nickname = userInfo.nickname;
-              avatar = userInfo.avatar;
-              meta = userInfo.meta;
-              logger.info('relogin', 'API 检测到登录成功', { userId, nickname });
-            }
-          } else {
-            // 回退：使用 content script 检测
-            const state = await checkLoginInTab(tabId);
+          {
+            const state = await detectInteractiveLoginState(account.platform, tabId, useDirectApi);
             if (state.loggedIn) {
               loggedIn = true;
               userId = state.userId;
               nickname = state.nickname;
               avatar = state.avatar;
               meta = state.meta;
+              logger.info('relogin', `${account.platform} 检测到登录成功`, { userId, nickname });
+            } else if (state.error) {
+              logger.debug('relogin', `${account.platform} 检测仍未确认登录`, { error: state.error });
             }
           }
           
@@ -1650,16 +1826,12 @@ export class AccountService {
             const now = Date.now();
             
             // 更新账号状态为 ACTIVE，重置连续失败次数，清除错误信息
-             const updated: Account = {
-               ...account,
-               nickname: pickBetterNickname(account.platform, account.nickname, nickname),
-               avatar: pickBetterAvatar(account.avatar, avatar),
-               updatedAt: now,
-               meta: {
-                 ...(account.meta || {}),
-                 ...(meta || {}),
-                ...(userId ? { profileId: userId } : {}),
-              },
+            const updated: Account = {
+              ...account,
+              nickname: pickBetterNickname(account.platform, account.nickname, nickname),
+              avatar: pickBetterAvatar(account.avatar, avatar),
+              updatedAt: now,
+               meta: mergeAccountMeta(account.platform, account.meta as any, meta as any, userId),
               status: AccountStatus.ACTIVE,
               lastCheckAt: now,
               lastError: undefined,
@@ -2092,8 +2264,8 @@ export class AccountService {
       'tencent-cloud': 'https://cloud.tencent.com/developer/article/write',
       'aliyun': 'https://developer.aliyun.com/article/new',
       'segmentfault': 'https://segmentfault.com/write',
-      'bilibili': 'https://member.bilibili.com/platform/upload/text/edit',
-      'oschina': 'https://my.oschina.net/u/home/publish',
+      'bilibili': 'https://member.bilibili.com/platform/upload/text/new-edit',
+      'oschina': 'https://my.oschina.net/blog/ai-write',
     };
     
     return MANUAL_PUBLISH_URLS[platform] || null;

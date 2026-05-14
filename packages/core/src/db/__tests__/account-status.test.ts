@@ -91,7 +91,7 @@ describe('Account Status Persistence', () => {
           expect(loaded.avatar).toBe(account.avatar);
         }
         if (account.meta !== undefined) {
-          expect(loaded.meta).toEqual(account.meta);
+          expect(loaded.meta).toEqual(simulatePersistenceRoundTrip(account.meta));
         }
       }),
       { numRuns: 100 }
