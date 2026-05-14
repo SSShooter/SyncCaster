@@ -1,6 +1,6 @@
 {
   "name": "@synccaster/agent-bridge",
-  "version": "2.0.0",
+  "version": "2.0.7",
   "type": "module",
   "bin": {
     "synccaster-agent-bridge-native": "./dist/native-host.js",

@@ -5,6 +5,16 @@ import { resetSyncGroup } from './tab-group-manager';
 
 const logger = new Logger('job-service');
 
+export function normalizePublishResultError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 export interface CreateJobInput {
   postId: string;
   targets: PublishTarget[];
@@ -167,7 +177,18 @@ async function executeJob(jobId: string) {
       const startAt = Date.now();
       logger.info('target', `Publishing to ${target.platform}`, { jobId, target });
 
-      const result = await publishToTarget(jobId, post as any, target as any, { activeTab });
+      let result;
+      try {
+        result = await publishToTarget(jobId, post as any, target as any, { activeTab });
+      } catch (error) {
+        const normalized = normalizePublishResultError(error);
+        logger.error('target', `Uncaught publishToTarget error for ${target.platform}`, {
+          jobId,
+          target,
+          error: normalized,
+        });
+        result = { success: false, error: normalized };
+      }
 
       logger.info('target', `Publish result for ${target.platform}`, {
         success: result.success,

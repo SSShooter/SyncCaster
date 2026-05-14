@@ -1,5 +1,18 @@
 import type { PlatformAdapter } from './base';
-import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
+import {
+  renderMarkdownToHtmlForPaste,
+  replaceLinkedMarkdownImagesWithPlainImages,
+  replaceHtmlImagesWithPlaceholders,
+  stripEmptyHtmlParagraphs,
+} from '@synccaster/core';
+
+export function shouldPreferZhihuHtmlMode(markdown: string, downloadedImagesCount = 0): boolean {
+  const body = String(markdown || '');
+  if (downloadedImagesCount > 0) return true;
+  if (/```[\s\S]*?```/.test(body)) return true;
+  if (/!\[[^\]]*\]\([^)]+\)/.test(body)) return true;
+  return false;
+}
 
 /**
  * 知乎适配器
@@ -43,7 +56,7 @@ export const zhihuAdapter: PlatformAdapter = {
   async transform(post, { config }) {
     // 知乎支持 Markdown 粘贴解析：优先使用 Markdown 原文
     // 粘贴后平台会弹出"识别到 Markdown 格式"提示，插件自动点击确认解析
-    const markdown = post.body_md || '';
+    const markdown = replaceLinkedMarkdownImagesWithPlainImages(post.body_md || '');
     let contentHtml = (post as any)?.meta?.body_html || '';
     if (!contentHtml && markdown) {
       // 备用：若 Markdown 解析失败，使用预渲染的 HTML
@@ -74,6 +87,46 @@ export const zhihuAdapter: PlatformAdapter = {
       console.log('[zhihu] fillAndPublish starting', payload);
       console.log('[zhihu] Current URL:', window.location.href);
       console.log('[zhihu] Document ready state:', document.readyState);
+      const replaceLinkedMarkdownImagesWithPlainImagesLocal = (markdown: string): string =>
+        String(markdown || '').replace(
+          /\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)]+)\)/g,
+          (_match, alt: string, imageUrl: string) => `![${alt}](${imageUrl})`,
+        );
+      const shouldPreferZhihuHtmlModeLocal = (markdown: string, downloadedImagesCount = 0): boolean => {
+        const body = String(markdown || '');
+        if (downloadedImagesCount > 0) return true;
+        if (/```[\s\S]*?```/.test(body)) return true;
+        if (/!\[[^\]]*\]\([^)]+\)/.test(body)) return true;
+        return false;
+      };
+      const replaceHtmlImagesWithPlaceholdersLocal = (
+        rawHtml: string,
+        replacements: Array<{ url: string; placeholder: string }>
+      ): string => {
+        if (!rawHtml || replacements.length === 0) return rawHtml || '';
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(rawHtml, 'text/html');
+        const replacementMap = new Map(replacements.map((item) => [item.url, item.placeholder] as const));
+        doc.querySelectorAll('img').forEach((img) => {
+          const src = img.getAttribute('src') || '';
+          const placeholder = replacementMap.get(src);
+          if (placeholder) {
+            img.replaceWith(doc.createTextNode(placeholder));
+          }
+        });
+        return doc.body.innerHTML;
+      };
+      const stripEmptyHtmlParagraphsLocal = (html: string): string => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(String(html || ''), 'text/html');
+        doc.querySelectorAll('p').forEach((p) => {
+          const text = (p.textContent || '').replace(/\u00a0/g, ' ').trim();
+          if (!text && p.querySelectorAll('img,video,iframe,pre,code,blockquote,table,ul,ol,li').length === 0) {
+            p.remove();
+          }
+        });
+        return doc.body.innerHTML;
+      };
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
       
@@ -113,7 +166,8 @@ export const zhihuAdapter: PlatformAdapter = {
         // 0. 处理图片上传（在填充内容之前）
         // 如果有 __downloadedImages，通过 DOM 粘贴方式上传图片并替换 local:// 链接
         const downloadedImages = (payload as any).__downloadedImages as Array<{ url: string; base64: string; mimeType: string }> | undefined;
-        let contentMarkdownProcessed = String((payload as any).contentMarkdown || '');
+        let contentMarkdownProcessed = replaceLinkedMarkdownImagesWithPlainImagesLocal(String((payload as any).contentMarkdown || ''));
+        let contentHtmlProcessed = stripEmptyHtmlParagraphsLocal(String((payload as any).contentHtml || ''));
 
         // 将 base64 转换为 Blob（不使用 fetch，绕过 CSP 限制）
         const dataUrlToBlob = (dataUrl: string): Blob => {
@@ -312,11 +366,13 @@ export const zhihuAdapter: PlatformAdapter = {
           console.log('[zhihu] Step 0: 处理图片 - 使用占位符替代图片链接', { count: downloadedImages.length });
 
           let imageIndex = 0;
+          const htmlReplacements: Array<{ url: string; placeholder: string }> = [];
           for (const img of downloadedImages) {
-            if (img.url.startsWith('local://')) {
+            if (img.url) {
               imageIndex++;
               const placeholder = `【图片${imageIndex}】`;
               imagePlaceholders.set(placeholder, { base64: img.base64, mimeType: img.mimeType });
+              htmlReplacements.push({ url: img.url, placeholder });
 
               // 替换 Markdown 中的图片链接为占位符
               const mdPattern = new RegExp(
@@ -328,11 +384,14 @@ export const zhihuAdapter: PlatformAdapter = {
             }
           }
 
+          contentHtmlProcessed = replaceHtmlImagesWithPlaceholdersLocal(contentHtmlProcessed, htmlReplacements);
+
           console.log('[zhihu] Created', imagePlaceholders.size, 'image placeholders');
         }
 
         // 更新 payload 中的 contentMarkdown
         (payload as any).contentMarkdown = contentMarkdownProcessed;
+        (payload as any).contentHtml = contentHtmlProcessed;
 
         // 1. 填充标题
         console.log('[zhihu] Step 1: 填充标题');
@@ -387,10 +446,8 @@ export const zhihuAdapter: PlatformAdapter = {
         console.log('[zhihu] Step 2: 填充内容');
 
         const contentMarkdown = String((payload as any).contentMarkdown || '');
-        const contentHtml = String((payload as any).contentHtml || '');
-
-        // 优先使用 Markdown 原文（知乎支持 Markdown 解析）
-        const useMarkdown = !!contentMarkdown;
+        const contentHtml = stripEmptyHtmlParagraphsLocal(String((payload as any).contentHtml || ''));
+        const useMarkdown = !shouldPreferZhihuHtmlModeLocal(contentMarkdown, imagePlaceholders.size) && !!contentMarkdown;
         const contentToFill = useMarkdown ? contentMarkdown : contentHtml;
 
         console.log('[zhihu] Content mode:', useMarkdown ? 'Markdown' : 'HTML');
@@ -438,7 +495,12 @@ export const zhihuAdapter: PlatformAdapter = {
         try {
           // 方案1: 使用 ClipboardEvent 构造函数的 clipboardData 参数
           const dt = new DataTransfer();
-          dt.setData('text/plain', contentToPaste);
+          if (useMarkdown) {
+            dt.setData('text/plain', contentToPaste);
+          } else {
+            dt.setData('text/html', contentToPaste);
+            dt.setData('text/plain', editor.innerText || '');
+          }
 
           const pasteEvent = new ClipboardEvent('paste', {
             bubbles: true,
@@ -454,7 +516,12 @@ export const zhihuAdapter: PlatformAdapter = {
           // 方案2: 使用 Object.defineProperty 设置 clipboardData
           try {
             const dt = new DataTransfer();
-            dt.setData('text/plain', contentToPaste);
+            if (useMarkdown) {
+              dt.setData('text/plain', contentToPaste);
+            } else {
+              dt.setData('text/html', contentToPaste);
+              dt.setData('text/plain', editor.innerText || '');
+            }
 
             const pasteEvent = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
             Object.defineProperty(pasteEvent, 'clipboardData', {
@@ -479,7 +546,7 @@ export const zhihuAdapter: PlatformAdapter = {
 
         // 查找并点击"确认并解析"按钮（格式解析确认）
         let parseClicked = false;
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; useMarkdown && i < 20; i++) {
           // 查找所有按钮
           const allButtons = Array.from(document.querySelectorAll('button, [role="button"], .Button'));
           const parseBtn = allButtons.find((btn) => {
@@ -522,7 +589,7 @@ export const zhihuAdapter: PlatformAdapter = {
           await sleep(300);
         }
         
-        if (!parseClicked) {
+        if (useMarkdown && !parseClicked) {
           console.log('[zhihu] No Markdown parse dialog found (may not be needed)');
         }
 

@@ -2,7 +2,13 @@
 import { ChromeStorageBridge } from '@synccaster/core';
 import { getAdapter } from '@synccaster/adapters';
 import { executeInOrigin, getReuseTabInfo, openOrReuseTab } from './inpage-runner';
-import { ImageUploadPipeline, getImageStrategy, type ImageUploadProgress, renderMarkdownToHtmlForPaste } from '@synccaster/core';
+import {
+  ImageUploadPipeline,
+  getImageStrategy,
+  type ImageUploadProgress,
+  renderMarkdownToHtmlForPaste,
+  replaceLinkedMarkdownImagesWithPlainImages,
+} from '@synccaster/core';
 import { buildAssetManifestFromPost, type AssetManifest } from '@synccaster/core';
 
 export interface EngineResult {
@@ -11,6 +17,76 @@ export interface EngineResult {
   remoteId?: string;
   error?: string;
   meta?: Record<string, any>;
+}
+
+export function applyUrlMappingToRichEditorHtml(html: string, pairs: [string, string][]): string {
+  if (!html || pairs.length === 0) return html || '';
+  let next = html || '';
+  const normalizedPairs = pairs
+    .filter(([from, to]) => !!from && !!to && from !== to)
+    .flatMap(([from, to]) => {
+      const variants = new Set<string>([
+        from,
+        from.replace(/^https?:\/\//i, '//'),
+        from.replace(/^https:\/\//i, 'http://'),
+        from.replace(/^http:\/\//i, 'https://'),
+      ]);
+      return Array.from(variants)
+        .filter(Boolean)
+        .map((variant) => [variant, to] as [string, string]);
+    })
+    .sort((a, b) => b[0].length - a[0].length);
+
+  for (const [from, to] of normalizedPairs) {
+    next = next.split(from).join(to);
+  }
+
+  return next;
+}
+
+export function applyImagePlaceholderMapping(text: string, pairs: [string, string][]): string {
+  if (!text || pairs.length === 0) return text || '';
+  let next = text || '';
+  const normalizedPairs = pairs
+    .filter(([from, to]) => !!from && !!to && from !== to)
+    .sort((a, b) => b[0].length - a[0].length);
+
+  for (const [from, to] of normalizedPairs) {
+    next = next.split(from).join(to);
+  }
+
+  return next;
+}
+
+const DOM_FILL_DOWNLOAD_PLATFORMS = new Set([
+  'aliyun',
+  'juejin',
+  'jianshu',
+  'tencent-cloud',
+  'baijiahao',
+  'zhihu',
+  'oschina',
+  'wangyihao',
+  'csdn',
+  'toutiao',
+]);
+
+export function shouldDownloadImagesBeforeDomFill(
+  adapterKind: string,
+  platformId: string,
+  strategyMode?: string,
+  prefillBeforeImageProcessing = false,
+): boolean {
+  if (adapterKind !== 'dom') return false;
+  if (prefillBeforeImageProcessing) return true;
+  return (
+    (strategyMode === 'domPasteUpload' && DOM_FILL_DOWNLOAD_PLATFORMS.has(platformId)) ||
+    platformId === 'segmentfault'
+  );
+}
+
+function isInfoqDraftUrl(url: string | undefined): boolean {
+  return /^https:\/\/xie\.infoq\.cn\/draft\/[A-Za-z0-9_-]+(?:[/?#].*)?$/i.test(String(url || '').trim());
 }
 
 function isLikelyPublishedUrl(platformId: string, url: string): boolean {
@@ -63,8 +139,13 @@ const jobDownloadedImagesCache = new Map<
 >();
 const JOB_IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 
-function getJobImagesCacheKey(jobId: string) {
-  return `${jobId}:downloadedImages`;
+function getJobImagesCacheKey(jobId: string, images: ImageInput[]) {
+  const normalizedUrls = images
+    .map((image) => resolveImageInput(image).originalUrl)
+    .filter(Boolean)
+    .sort()
+    .join('|');
+  return `${jobId}:downloadedImages:${normalizedUrls}`;
 }
 
 function cleanupJobImagesCache() {
@@ -117,7 +198,7 @@ export async function publishToTarget(
     // 处理图片/内容预处理
     // 注意：部分来源的 Markdown 图片链接会混入空格/换行（例如 `. jpeg`），导致平台/上传无法识别。
     // 这里先规范化图片语法里的 URL，保证后续提取、上传、替换都基于同一个“干净 URL”。
-    let bodyMd = post.body_md || '';
+    let bodyMd = replaceLinkedMarkdownImagesWithPlainImages(post.body_md || '');
     // OSChina 的 HTML 编辑器不支持直接渲染 `$...$` 公式：先把 LaTeX 公式转为图片链接（后续会走同一套图片上传/替换）。
     if (target.platform === 'oschina') {
       bodyMd = convertLatexMathToImageMarkdown(bodyMd);
@@ -248,12 +329,12 @@ export async function publishToTarget(
           { closeTab: false, active: activeTab, reuseKey: domReuseKey },
         );
 
-        if (draftResult?.success && draftResult?.draftUrl) {
+        if (draftResult?.success && isInfoqDraftUrl(draftResult?.draftUrl)) {
           domTargetUrl = draftResult.draftUrl;
           await openOrReuseTab(domTargetUrl, { active: activeTab, reuseKey: domReuseKey, addToSyncGroup: true });
           await jobLogger({ level: 'info', step: 'dom', message: 'InfoQ: 草稿创建成功', meta: { draftUrl: domTargetUrl } });
         } else {
-          const msg = draftResult?.error || '未知错误';
+          const msg = draftResult?.error || `无效草稿地址: ${draftResult?.draftUrl || 'empty'}`;
           await jobLogger({ level: 'error', step: 'dom', message: `InfoQ: 预创建草稿失败 - ${msg}` });
           throw new Error(`InfoQ 创建草稿失败: ${msg}`);
         }
@@ -267,38 +348,39 @@ export async function publishToTarget(
     // domPasteUpload（如掘金/阿里云）在“同一发布页”里做粘贴上传更稳定，避免先打开一个空白上传页导致报错/阻塞。
     let downloadedImages: DownloadedImage[] = [];
 
-    const needsDownloadedImagesForDomFill =
-      adapter.kind === 'dom' &&
-      ((strategy?.mode === 'domPasteUpload' &&
-        (target.platform === 'aliyun' || target.platform === 'juejin' || target.platform === 'jianshu' || target.platform === 'tencent-cloud' || target.platform === 'baijiahao' || target.platform === '51cto' || target.platform === 'zhihu' || target.platform === 'oschina' || target.platform === 'wangyihao' || target.platform === 'csdn' || target.platform === 'toutiao')) ||
-       target.platform === 'segmentfault');
-
     const prefillBeforeImageProcessing =
       adapter.kind === 'dom' && target.platform === 'bilibili';
+    const shouldDownloadImagesForDomFill = shouldDownloadImagesBeforeDomFill(
+      adapter.kind,
+      target.platform,
+      strategy?.mode,
+      prefillBeforeImageProcessing,
+    );
 
     const imagesToProcess =
       target.platform === 'csdn'
         ? manifest.images.filter((img) => img.originalUrl.startsWith('local://'))
         : manifest.images;
+    const shouldProcessImages = imagesToProcess.length > 0 && !!strategy && strategy.mode !== 'externalUrlOnly';
 
     console.log('[publish-engine] Image processing check:', {
       prefillBeforeImageProcessing,
       imagesToProcessCount: imagesToProcess.length,
       strategy: strategy?.mode || 'null',
-      needsDownloadedImagesForDomFill
+      shouldDownloadImagesForDomFill
     });
-    if (!prefillBeforeImageProcessing && imagesToProcess.length > 0 && strategy && strategy.mode !== 'externalUrlOnly') {
+    if (shouldProcessImages) {
       await jobLogger({
         level: 'info',
         step: 'upload_images',
         message: `发现 ${imagesToProcess.length} 张图片需要处理`,
       });
 
-      if (needsDownloadedImagesForDomFill) {
+      if (shouldDownloadImagesForDomFill) {
         try {
           cleanupJobImagesCache();
           const imagesToDownload = imagesToProcess;
-          const cacheKey = getJobImagesCacheKey(jobId);
+          const cacheKey = getJobImagesCacheKey(jobId, imagesToDownload);
           let cached = jobDownloadedImagesCache.get(cacheKey);
           if (!cached) {
             const promise = downloadImagesInBackground(imagesToDownload, (progress) => {
@@ -322,6 +404,13 @@ export async function publishToTarget(
             step: 'upload_images',
             message: `图片下载完成: ${downloadedImages.length}/${imagesToProcess.length}`,
           });
+          if (prefillBeforeImageProcessing) {
+            await jobLogger({
+              level: 'info',
+              step: 'upload_images',
+              message: '图片已预下载，内容填充后继续上传替换',
+            });
+          }
         } catch (imgError: any) {
           console.error('[publish-engine] 图片下载失败', imgError);
           await jobLogger({
@@ -383,11 +472,7 @@ export async function publishToTarget(
         }
       }
     } else {
-      if (prefillBeforeImageProcessing && manifest.images.length > 0 && strategy && strategy.mode !== 'externalUrlOnly') {
-        await jobLogger({ level: 'info', step: 'upload_images', message: '图片处理将在内容填充后进行' });
-      } else {
-        await jobLogger({ level: 'info', step: 'upload_images', message: '无需处理图片或平台不支持' });
-      }
+      await jobLogger({ level: 'info', step: 'upload_images', message: '无需处理图片或平台不支持' });
     }
 
     // 转换内容
@@ -447,11 +532,11 @@ export async function publishToTarget(
             const draftResult = await executeInOrigin<{ success: boolean; draftUrl?: string; error?: string }>(targetUrl, dom.createDraft as any, [], { closeTab: false, active: activeTab, reuseKey });
             console.log('[publish-engine] InfoQ createDraft result:', draftResult);
 
-            if (draftResult?.success && draftResult?.draftUrl) {
+            if (draftResult?.success && isInfoqDraftUrl(draftResult?.draftUrl)) {
               targetUrl = draftResult.draftUrl;
               await jobLogger({ level: 'info', step: 'dom', message: `InfoQ: 草稿创建成功，跳转到编辑页`, meta: { draftUrl: targetUrl } });
             } else {
-              const errorMsg = draftResult?.error || '未知错误';
+              const errorMsg = draftResult?.error || `无效草稿地址: ${draftResult?.draftUrl || 'empty'}`;
               await jobLogger({ level: 'error', step: 'dom', message: `InfoQ: 创建草稿失败 - ${errorMsg}，请确保已登录 InfoQ` });
               throw new Error(`InfoQ 创建草稿失败: ${errorMsg}`);
             }
@@ -497,7 +582,11 @@ export async function publishToTarget(
           strategy &&
           strategy.mode !== 'externalUrlOnly'
         ) {
-          await jobLogger({ level: 'info', step: 'upload_images', message: `发现 ${manifest.images.length} 张图片需要处理` });
+          await jobLogger({
+            level: 'info',
+            step: 'upload_images',
+            message: `开始上传 ${manifest.images.length} 张已预下载图片并回写正文`,
+          });
           try {
             const imageResult = await uploadImagesInPlatform(
               manifest.images,
@@ -517,15 +606,41 @@ export async function publishToTarget(
 
             if (imageResult.urlMapping.size > 0) {
               const entries = Array.from(imageResult.urlMapping.entries());
-              const applyMappingInEditor = async (pairs: [string, string][]) => {
-                const replaceByPairs = (text: string) => {
-                  let out = text || '';
-                  const sorted = pairs.slice().sort((a, b) => b[0].length - a[0].length);
-                  for (const [from, to] of sorted) {
-                    if (!from || !to || from === to) continue;
-                    out = out.split(from).join(to);
+              const placeholderMappings = Array.isArray((result as any)?.__imagePlaceholders)
+                ? ((result as any).__imagePlaceholders as Array<{ url: string; placeholder: string }>)
+                : [];
+              const placeholderPairs = placeholderMappings
+                .map((item) => {
+                  const uploaded = imageResult.urlMapping.get(item.url);
+                  return uploaded ? ([item.placeholder, uploaded] as [string, string]) : null;
+                })
+                .filter(Boolean) as [string, string][];
+
+              const applyMappingInEditor = async (pairs: [string, string][], placeholderPairsArg: [string, string][]) => {
+                const applyMappingToHtml = (html: string) => {
+                  let next = html || '';
+                  const normalizedPairs = pairs
+                    .filter(([from, to]) => !!from && !!to && from !== to)
+                    .flatMap(([from, to]) => {
+                      const variants = new Set<string>([
+                        from,
+                        from.replace(/^https?:\/\//i, '//'),
+                        from.replace(/^https:\/\//i, 'http://'),
+                        from.replace(/^http:\/\//i, 'https://'),
+                      ]);
+                      return Array.from(variants)
+                        .filter(Boolean)
+                        .map((variant) => [variant, to] as [string, string]);
+                    })
+                    .sort((a, b) => b[0].length - a[0].length);
+
+                  for (const [from, to] of normalizedPairs) {
+                    next = next.split(from).join(to);
                   }
-                  return out;
+                  for (const [from, to] of placeholderPairsArg) {
+                    next = next.split(from).join(`<img src="${to}" alt="">`);
+                  }
+                  return next;
                 };
 
                 const getAllDocs = (): Document[] => {
@@ -558,28 +673,26 @@ export async function publishToTarget(
                   ((editor.closest('.ql-container') as any)?.__quill ?? null);
 
                 const currentHtml = editor.innerHTML || '';
-                const nextHtml = replaceByPairs(currentHtml);
-
-                // 优先用 Quill API 回写，保证编辑器内部 state 更新
-                try {
-                  if (quill?.clipboard?.dangerouslyPasteHTML) {
-                    quill.clipboard.dangerouslyPasteHTML(0, nextHtml);
-                    quill.setSelection?.(quill.getLength?.() ?? 0, 0);
-                    return { ok: true, method: 'quill' };
-                  }
-                } catch { }
+                const nextHtml = applyMappingToHtml(currentHtml);
 
                 // DOM 兜底：替换 img/src 等属性
                 try {
+                  if (nextHtml === currentHtml) {
+                    return { ok: true, method: 'noop' };
+                  }
                   editor.innerHTML = nextHtml;
                   editor.dispatchEvent(new Event('input', { bubbles: true }));
-                  return { ok: true, method: 'dom' };
+                  editor.dispatchEvent(new Event('change', { bubbles: true }));
+                  if (quill?.update) {
+                    quill.update('user');
+                  }
+                  return { ok: true, method: quill ? 'quill-dom' : 'dom' };
                 } catch {
                   return { ok: false, reason: 'apply_failed' };
                 }
               };
 
-              await executeInOrigin(targetUrl, applyMappingInEditor as any, [entries], {
+              await executeInOrigin(targetUrl, applyMappingInEditor as any, [entries, placeholderPairs], {
                 closeTab: false,
                 active: false,
                 reuseKey,
@@ -840,6 +953,10 @@ export async function publishToTarget(
     }
 
     // DOM 模式：不能“猜测成功”。必须拿到可信的文章 URL，否则标记为待确认。
+    if ((result as any)?.__synccasterError?.message) {
+      throw new Error((result as any).__synccasterError.message);
+    }
+
     if (!result || !result.url || !isLikelyPublishedUrl(target.platform, String(result.url))) {
       if (adapter.kind === 'dom') {
         const reuseKey = `${jobId}:${target.platform}:${target.accountId}`;
@@ -1103,9 +1220,9 @@ const PLATFORM_URLS: Record<string, string> = {
   // 思否：使用写文章页面，避免打开首页
   segmentfault: 'https://segmentfault.com/write?freshman=1',
   // 避免先打开首页再跳转编辑页（用户可见跳转/延迟）；图片上传与发文都可在专栏编辑页完成
-  bilibili: 'https://member.bilibili.com/platform/upload/text/edit',
+  bilibili: 'https://member.bilibili.com/platform/upload/text/new-edit',
   // 开源中国发文页面
-  oschina: 'https://my.oschina.net/blog/write',
+  oschina: 'https://my.oschina.net/blog/ai-write',
   toutiao: 'https://mp.toutiao.com/profile_v4/graphic/publish',
   infoq: 'https://xie.infoq.cn/',
   baijiahao: 'https://baijiahao.baidu.com/builder/rc/edit',
@@ -1370,9 +1487,17 @@ async function uploadImagesInPlatform(
         return { urlMapping, stats: { total: downloadedImages.length, success, failed } };
       }
 
-      console.warn(`[publish-engine] B 站 API 直传全部失败 (${failed}/${downloadedImages.length})，将回退到站内执行`);
+      console.warn(`[publish-engine] B 站 API 直传全部失败 (${failed}/${downloadedImages.length})，不再回退到站内粘贴上传以避免污染正文`);
+      return {
+        urlMapping: new Map(),
+        stats: { total: downloadedImages.length, success: 0, failed: downloadedImages.length },
+      };
     } catch (e: any) {
-      console.warn('[publish-engine] B 站 API 直传异常，回退到站内执行:', e?.message || e);
+      console.warn('[publish-engine] B 站 API 直传异常，不再回退到站内粘贴上传:', e?.message || e);
+      return {
+        urlMapping: new Map(),
+        stats: { total: downloadedImages.length, success: 0, failed: downloadedImages.length },
+      };
     }
   }
 
@@ -1697,13 +1822,30 @@ async function uploadImagesInPlatform(
           const file = new File([blob], filename, { type: blob.type || img.mimeType });
 
           const isTextInput = (node: any): node is HTMLTextAreaElement | HTMLInputElement =>
-            node && typeof node.value === 'string';
+            node &&
+            typeof node.value === 'string' &&
+            (!(node instanceof HTMLInputElement) || String(node.type || 'text').toLowerCase() !== 'file');
+
+          const isEditablePasteTarget = (node: HTMLElement) => {
+            if (node instanceof HTMLInputElement) {
+              const type = String(node.type || 'text').toLowerCase();
+              if (['file', 'hidden', 'checkbox', 'radio', 'submit', 'button', 'image', 'range', 'color'].includes(type)) {
+                return false;
+              }
+              return !node.disabled && !node.readOnly;
+            }
+            if (node instanceof HTMLTextAreaElement) {
+              return !node.disabled && !node.readOnly;
+            }
+            return node.getAttribute('contenteditable') === 'true';
+          };
 
           const pickPasteTarget = (root: HTMLElement) => {
             const doc = root.ownerDocument;
             const candidates = Array.from(doc.querySelectorAll<HTMLElement>('textarea, input, [contenteditable="true"]'));
-            const inRoot = candidates.filter((el) => root === el || root.contains(el));
-            const list = inRoot.length > 0 ? inRoot : candidates;
+            const eligible = candidates.filter((el) => isEditablePasteTarget(el));
+            const inRoot = eligible.filter((el) => root === el || root.contains(el));
+            const list = inRoot.length > 0 ? inRoot : eligible;
             const visible = list.filter((el) => {
               try {
                 const style = hostWin.getComputedStyle(el);
@@ -1782,31 +1924,6 @@ async function uploadImagesInPlatform(
           if (!pastedOk && doc.execCommand) {
             await focusEditor(pasteTarget, hostWin);
             pastedOk = doc.execCommand('paste');
-          }
-
-          // 备选方案：使用 input[type=file] 上传图片（更可靠）
-          if (!pastedOk) {
-            console.log('[image-upload] 粘贴/拖拽失败，尝试 input[type=file] 方式');
-            const fileInputs = Array.from(doc.querySelectorAll<HTMLInputElement>('input[type="file"]'));
-            const imageInput = fileInputs.find(input => {
-              const accept = input.accept || '';
-              return accept.includes('image') || accept === '' || accept === '*/*';
-            });
-
-            if (imageInput) {
-              try {
-                const DT = (hostWin as any).DataTransfer || (globalThis as any).DataTransfer;
-                const dt = new DT();
-                dt.items.add(file);
-                (imageInput as any).files = dt.files;
-                imageInput.dispatchEvent(new Event('change', { bubbles: true }));
-                imageInput.dispatchEvent(new Event('input', { bubbles: true }));
-                console.log('[image-upload] input[type=file] 触发成功');
-                pastedOk = true;
-              } catch (e) {
-                console.error('[image-upload] input[type=file] 方式失败', e);
-              }
-            }
           }
 
           if (!pastedOk) {

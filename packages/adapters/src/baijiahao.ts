@@ -1,6 +1,104 @@
 import type { PlatformAdapter } from './base';
 import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
 
+export interface BaijiahaoTitleCandidateMeta {
+  className?: string;
+  parentClassName?: string;
+  id?: string;
+  placeholder?: string;
+  tagName?: string;
+  width?: number;
+  height?: number;
+  textLength?: number;
+}
+
+const baijiahaoTitleHaystack = (meta: BaijiahaoTitleCandidateMeta) =>
+  [
+    meta.className,
+    meta.parentClassName,
+    meta.id,
+    meta.placeholder,
+    meta.tagName,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+export function scoreBaijiahaoTitleCandidate(meta: BaijiahaoTitleCandidateMeta): number {
+  const haystack = baijiahaoTitleHaystack(meta);
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+  const tagName = String(meta.tagName || '').toLowerCase();
+  let score = 0;
+
+  if (tagName === 'input' || tagName === 'textarea') score += 180;
+  if (/titleinput|title-input|title_input|title/.test(haystack)) score += 220;
+  if (/placeholder|请输入标题|标题/.test(haystack)) score += 120;
+  if (/client_components_titleinput|client_pages_edit_components_titleinput/.test(haystack)) score += 180;
+  if (/editor|ueditor|content|paragraph|draft/.test(haystack)) score -= 260;
+  if (width > 300) score += 20;
+  if (height > 120) score -= 60;
+  if ((meta.textLength || 0) > 120) score -= 90;
+
+  return score;
+}
+
+export interface BaijiahaoBodyCandidateMeta {
+  className?: string;
+  parentClassName?: string;
+  id?: string;
+  tagName?: string;
+  role?: string;
+  width?: number;
+  height?: number;
+  textLength?: number;
+}
+
+const baijiahaoBodyHaystack = (meta: BaijiahaoBodyCandidateMeta) =>
+  [
+    meta.className,
+    meta.parentClassName,
+    meta.id,
+    meta.tagName,
+    meta.role,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+export function scoreBaijiahaoBodyCandidate(meta: BaijiahaoBodyCandidateMeta): number {
+  const haystack = baijiahaoBodyHaystack(meta);
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+  const area = width * height;
+  const tagName = String(meta.tagName || '').toLowerCase();
+  let score = 0;
+
+  if (/ueditor|editor|content|paragraph|draft|write|article|rich/.test(haystack)) score += 180;
+  if (/textbox|data-block|public-drafteditor/.test(haystack)) score += 120;
+  if (/title|headline|placeholder/.test(haystack)) score -= 340;
+  if (tagName === 'input' || tagName === 'textarea') score -= 420;
+  if (height < 120) score -= 140;
+  score += Math.min(220, Math.round(area / 3000));
+  score += Math.min(60, Math.round((meta.textLength || 0) / 40));
+
+  return score;
+}
+
+function isLikelyBaijiahaoBodyCandidate(el: HTMLElement): boolean {
+  const rect = el.getBoundingClientRect();
+  return scoreBaijiahaoBodyCandidate({
+    className: el.className || '',
+    parentClassName: el.parentElement?.className || '',
+    id: el.id || '',
+    tagName: el.tagName,
+    role: el.getAttribute('role') || '',
+    width: rect.width,
+    height: rect.height,
+    textLength: (el.textContent || '').trim().length,
+  }) >= 80;
+}
+
 /**
  * 百家号适配器
  *
@@ -70,82 +168,198 @@ export const baijiahaoAdapter: PlatformAdapter = {
         }
         throw new Error('等待元素超时');
       };
+      const scoreTitleCandidateLocal = (meta: BaijiahaoTitleCandidateMeta): number => {
+        const haystack = [
+          meta.className,
+          meta.parentClassName,
+          meta.id,
+          meta.placeholder,
+          meta.tagName,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        const width = meta.width || 0;
+        const height = meta.height || 0;
+        const tagName = String(meta.tagName || '').toLowerCase();
+        let score = 0;
+
+        if (tagName === 'input' || tagName === 'textarea') score += 180;
+        if (/titleinput|title-input|title_input|title/.test(haystack)) score += 220;
+        if (/placeholder|请输入标题|标题/.test(haystack)) score += 120;
+        if (/client_components_titleinput|client_pages_edit_components_titleinput/.test(haystack)) score += 180;
+        if (/editor|ueditor|content|paragraph|draft/.test(haystack)) score -= 260;
+        if (width > 300) score += 20;
+        if (height > 120) score -= 60;
+        if ((meta.textLength || 0) > 120) score -= 90;
+
+        return score;
+      };
+      const scoreBodyCandidateLocal = (meta: BaijiahaoBodyCandidateMeta): number => {
+        const haystack = [
+          meta.className,
+          meta.parentClassName,
+          meta.id,
+          meta.tagName,
+          meta.role,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        const width = meta.width || 0;
+        const height = meta.height || 0;
+        const area = width * height;
+        const tagName = String(meta.tagName || '').toLowerCase();
+        let score = 0;
+
+        if (/ueditor|editor|content|paragraph|draft|write|article|rich/.test(haystack)) score += 180;
+        if (/textbox|data-block|public-drafteditor/.test(haystack)) score += 120;
+        if (/title|headline|placeholder/.test(haystack)) score -= 340;
+        if (tagName === 'input' || tagName === 'textarea') score -= 420;
+        if (height < 120) score -= 140;
+        score += Math.min(220, Math.round(area / 3000));
+        score += Math.min(60, Math.round((meta.textLength || 0) / 40));
+
+        return score;
+      };
+      const isLikelyBodyCandidateLocal = (el: HTMLElement): boolean => {
+        const rect = el.getBoundingClientRect();
+        return scoreBodyCandidateLocal({
+          className: el.className || '',
+          parentClassName: el.parentElement?.className || '',
+          id: el.id || '',
+          tagName: el.tagName,
+          role: el.getAttribute('role') || '',
+          width: rect.width,
+          height: rect.height,
+          textLength: (el.textContent || '').trim().length,
+        }) >= 80;
+      };
+      const getNodeValue = (node: HTMLElement) =>
+        node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
+          ? node.value.trim()
+          : (node.textContent || '').trim();
 
       const titleText = String((payload as any).title || '').trim();
       const html = String((payload as any).contentHtml || '');
       const markdown = String((payload as any).contentMarkdown || '');
 
-      // 1) 填充标题 - 百家号标题在 contenteditable div 中
-      if (titleText) {
-        await sleep(300); // 等待页面加载（优化：从 1000ms 减少到 300ms）
+      const isVisible = (el: Element) => {
+        const he = el as HTMLElement;
+        const style = window.getComputedStyle(he);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+        const rect = he.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
 
-        const titleEditor = await waitFor(() => {
-          // 百家号标题输入框在 .client_components_titleInput 内的 contenteditable div
-          // 添加更多选择器以适应不同版本的页面结构
-          const candidates = [
-            document.querySelector('.client_components_titleInput [contenteditable="true"]'),
-            document.querySelector('.client_pages_edit_components_titleInput [contenteditable="true"]'),
-            document.querySelector('[class*="titleInput"] [contenteditable="true"]'),
-            document.querySelector('[class*="Title"] [contenteditable="true"]'),
-            document.querySelector('[class*="title-input"] [contenteditable="true"]'),
-            document.querySelector('[class*="title_input"] [contenteditable="true"]'),
-            document.querySelector('[data-testid="title"] [contenteditable="true"]'),
-            document.querySelector('[placeholder*="标题"]'),
-            document.querySelector('[placeholder*="请输入标题"]'),
-          ];
-          return (candidates.find(el => el) as HTMLElement) || null;
+      const buildTitleMeta = (el: HTMLElement): BaijiahaoTitleCandidateMeta => {
+        const rect = el.getBoundingClientRect();
+        return {
+          className: el.className || '',
+          parentClassName: el.parentElement?.className || '',
+          id: el.id || '',
+          placeholder: el.getAttribute('placeholder') || '',
+          tagName: el.tagName,
+          width: rect.width,
+          height: rect.height,
+          textLength: (el.textContent || '').trim().length,
+        };
+      };
+
+      const buildBodyMeta = (el: HTMLElement): BaijiahaoBodyCandidateMeta => {
+        const rect = el.getBoundingClientRect();
+        return {
+          className: el.className || '',
+          parentClassName: el.parentElement?.className || '',
+          id: el.id || '',
+          tagName: el.tagName,
+          role: el.getAttribute('role') || '',
+          width: rect.width,
+          height: rect.height,
+          textLength: (el.textContent || '').trim().length,
+        };
+      };
+
+      const getTitleCandidates = (): HTMLElement[] => {
+        const selectors = [
+          'textarea[placeholder*="标题"]',
+          'input[placeholder*="标题"]',
+          'textarea[class*="title"]',
+          'input[class*="title"]',
+          'textarea[name*="title"]',
+          'input[name*="title"]',
+          '.client_components_titleInput textarea',
+          '.client_components_titleInput input',
+          '.client_pages_edit_components_titleInput textarea',
+          '.client_pages_edit_components_titleInput input',
+          '.client_components_titleInput [contenteditable="true"]',
+          '.client_pages_edit_components_titleInput [contenteditable="true"]',
+          '[class*="titleInput"] [contenteditable="true"]',
+          '[class*="title-input"] [contenteditable="true"]',
+          '[class*="title_input"] [contenteditable="true"]',
+          '[data-testid="title"] [contenteditable="true"]',
+          '[placeholder*="标题"][contenteditable="true"]',
+          '[placeholder*="请输入标题"][contenteditable="true"]',
+          '[data-testid="title"] textarea',
+          '[data-testid="title"] input',
+        ];
+        const seen = new Set<HTMLElement>();
+        const candidates: HTMLElement[] = [];
+        for (const selector of selectors) {
+          for (const node of Array.from(document.querySelectorAll(selector)) as HTMLElement[]) {
+            if (!node || seen.has(node) || !isVisible(node)) continue;
+            seen.add(node);
+            candidates.push(node);
+          }
+        }
+        return candidates;
+      };
+
+      let titleEditor: HTMLElement | null = null;
+
+        const setTitleValue = (node: HTMLElement, value: string) => {
+          if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
+            const proto = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+            if (setter) setter.call(node, value);
+            else (node as any).value = value;
+            node.dispatchEvent(new Event('input', { bubbles: true }));
+            node.dispatchEvent(new Event('change', { bubbles: true }));
+            node.dispatchEvent(new Event('blur', { bubbles: true }));
+            return;
+          }
+          node.focus();
+          document.execCommand('selectAll', false);
+          document.execCommand('delete', false);
+          const inserted = document.execCommand('insertText', false, value);
+          if (!inserted) node.textContent = value;
+          node.dispatchEvent(new Event('input', { bubbles: true }));
+          node.dispatchEvent(new Event('change', { bubbles: true }));
+          node.dispatchEvent(new Event('blur', { bubbles: true }));
+        };
+
+        // 1) 填充标题 - 百家号标题可能是 input/textarea 或 contenteditable 容器
+        if (titleText) {
+          await sleep(300); // 等待页面加载（优化：从 1000ms 减少到 300ms）
+
+        titleEditor = await waitFor(() => {
+          const candidates = getTitleCandidates()
+            .map((el) => ({ el, score: scoreTitleCandidateLocal(buildTitleMeta(el)) }))
+            .filter((item) => item.score > 0)
+            .sort((a, b) => b.score - a.score);
+          return candidates[0]?.el || null;
         }, 10000);
 
         if (titleEditor) {
           console.log('[baijiahao] 找到标题编辑器，开始填充标题');
 
-          // 聚焦编辑器
-          titleEditor.focus();
+          setTitleValue(titleEditor, titleText);
           await sleep(100);
 
-          // 方法1：使用 selectAll + delete 清空内容（模拟用户操作）
-          document.execCommand('selectAll', false);
-          await sleep(50);
-          document.execCommand('delete', false);
-          await sleep(50);
-
-          // 方法2：如果还有内容，使用 innerHTML 清空
-          if (titleEditor.textContent?.trim()) {
-            titleEditor.innerHTML = '';
-            titleEditor.textContent = '';
-            await sleep(50);
-          }
-
-          // 重新聚焦
-          titleEditor.focus();
-          await sleep(50);
-
-          // 插入新标题
-          let inserted = document.execCommand('insertText', false, titleText);
-
-          // 如果 execCommand 不生效，使用备用方案
-          if (!inserted || !titleEditor.textContent?.trim()) {
-            console.log('[baijiahao] execCommand 失败，使用备用方案');
-            // 备用方案1：直接设置 textContent
-            titleEditor.textContent = titleText;
-            titleEditor.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-
-          // 如果还是没有内容，使用 innerHTML
-          if (!titleEditor.textContent?.trim()) {
-            console.log('[baijiahao] textContent 失败，使用 innerHTML');
-            titleEditor.innerHTML = titleText;
-            titleEditor.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-
-          // 触发事件通知框架
-          titleEditor.dispatchEvent(new Event('input', { bubbles: true }));
-          titleEditor.dispatchEvent(new Event('change', { bubbles: true }));
-          titleEditor.dispatchEvent(new Event('blur', { bubbles: true }));
-
           // 验证填充结果
-          const actualTitle = titleEditor.textContent?.trim() || '';
-          if (actualTitle === titleText) {
+          const actualTitle =
+            getNodeValue(titleEditor);
+          if (actualTitle === titleText || actualTitle.includes(titleText)) {
             console.log('[baijiahao] 标题填充成功:', titleText.substring(0, 20) + '...');
           } else {
             console.warn('[baijiahao] 标题填充可能不完整，期望:', titleText.substring(0, 20), '实际:', actualTitle.substring(0, 20));
@@ -395,38 +609,44 @@ export const baijiahaoAdapter: PlatformAdapter = {
         }
       }
 
-      // 方法3：降级到主文档中的 contenteditable 元素（排除标题区域）
-      if (!filled) {
-        const candidates = Array.from(document.querySelectorAll('[contenteditable="true"]')) as HTMLElement[];
-        // 排除标题区域
-        const filtered = candidates.filter(el => {
-          const className = el.className || '';
-          const parentClassName = el.parentElement?.className || '';
-          const id = el.id || '';
-          // 排除标题相关元素
-          if (/title/i.test(className) || /title/i.test(parentClassName) || /title/i.test(id)) {
-            return false;
+      // 方法3：降级到主文档中的正文编辑区
+        if (!filled) {
+        const selectors = [
+          '[contenteditable="true"][data-testid*="editor"]',
+          '[contenteditable="true"][role="textbox"]',
+          '[contenteditable="true"][class*="paragraph"]',
+          '[contenteditable="true"][class*="editor"]',
+          '[contenteditable="true"][class*="content"]',
+          '[contenteditable="true"][class*="article"]',
+          '[contenteditable="true"]',
+        ];
+        const seen = new Set<HTMLElement>();
+        const candidates: HTMLElement[] = [];
+        for (const selector of selectors) {
+          for (const node of Array.from(document.querySelectorAll(selector)) as HTMLElement[]) {
+            if (
+              !node ||
+              seen.has(node) ||
+              !isVisible(node) ||
+              !isLikelyBodyCandidateLocal(node) ||
+              (titleEditor && (node === titleEditor || node.contains(titleEditor) || titleEditor.contains(node)))
+            ) {
+              continue;
+            }
+            seen.add(node);
+            candidates.push(node);
           }
-          // 排除太小的元素
-          const rect = el.getBoundingClientRect();
-          if (rect.width < 200 || rect.height < 100) {
-            return false;
-          }
-          return true;
-        });
-        
-        // 按面积排序，取最大的
-        filtered.sort((a, b) => {
-          const ra = a.getBoundingClientRect();
-          const rb = b.getBoundingClientRect();
-          return rb.width * rb.height - ra.width * ra.height;
-        });
+        }
+        const filtered = candidates.sort(
+          (a, b) => scoreBodyCandidateLocal(buildBodyMeta(b)) - scoreBodyCandidateLocal(buildBodyMeta(a))
+        );
         
         if (filtered.length > 0) {
           const contentEditor = filtered[0];
           contentEditor.focus();
           contentEditor.innerHTML = htmlContent;
           contentEditor.dispatchEvent(new Event('input', { bubbles: true }));
+          contentEditor.dispatchEvent(new Event('change', { bubbles: true }));
           console.log('[baijiahao] 通过 contenteditable 降级填充成功');
           filled = true;
         }

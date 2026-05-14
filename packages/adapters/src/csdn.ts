@@ -146,6 +146,21 @@ export const csdnAdapter: PlatformAdapter = {
         el.dispatchEvent(new Event('blur', { bubbles: true }));
       };
 
+      const isEditableTextControl = (el: HTMLElement) => {
+        if (el instanceof HTMLInputElement) {
+          const type = String(el.type || 'text').toLowerCase();
+          if (['file', 'hidden', 'checkbox', 'radio', 'submit', 'button', 'image', 'range', 'color'].includes(type)) {
+            return false;
+          }
+          return !el.disabled && !el.readOnly;
+        }
+        if (el instanceof HTMLTextAreaElement) {
+          return !el.disabled && !el.readOnly;
+        }
+        if (el.getAttribute('contenteditable') === 'true') return true;
+        return el.getAttribute('role') === 'textbox';
+      };
+
       const findTitleField = (): HTMLElement | null => {
         const preferred = [
           '.article-bar__title input',
@@ -164,7 +179,7 @@ export const csdnAdapter: PlatformAdapter = {
 
         const candidates = queryAllDeep('input, textarea, [contenteditable="true"], [role="textbox"]')
           .map((e) => e as HTMLElement)
-          .filter(isVisible);
+          .filter((el) => isVisible(el) && isEditableTextControl(el));
         if (!candidates.length) return null;
         candidates.sort((a, b) => getRectArea(b) - getRectArea(a));
         return candidates.find((el) => el.getBoundingClientRect().top < 260 && getRectArea(el) > 20000) || candidates[0];
@@ -393,7 +408,7 @@ export const csdnAdapter: PlatformAdapter = {
         console.log('[csdn-fill] Trying textarea...');
         const tas = queryAllDeep('textarea')
           .map((e) => e as HTMLTextAreaElement)
-          .filter((e) => isVisible(e) && !isLikelyTitle(e));
+          .filter((e) => isVisible(e) && isEditableTextControl(e) && !isLikelyTitle(e));
         console.log('[csdn-fill] Found textareas:', tas.length);
         if (!tas.length) return false;
         tas.sort((a, b) => getRectArea(b) - getRectArea(a));
@@ -409,7 +424,7 @@ export const csdnAdapter: PlatformAdapter = {
         console.log('[csdn-fill] Trying contenteditable fallback...');
         const editables = queryAllDeep('[contenteditable="true"]')
           .map((e) => e as HTMLElement)
-          .filter((e) => isVisible(e) && !isLikelyTitle(e) && getRectArea(e) > 10000);
+          .filter((e) => isVisible(e) && isEditableTextControl(e) && !isLikelyTitle(e) && getRectArea(e) > 10000);
         
         console.log('[csdn-fill] Found contenteditable elements:', editables.length);
         if (editables.length === 0) return false;
@@ -489,7 +504,7 @@ export const csdnAdapter: PlatformAdapter = {
       const findBestRichEditor = (): HTMLElement | null => {
         const candidates = queryAllDeep('.ProseMirror, .ql-editor, [contenteditable="true"], [role="textbox"]')
           .map((e) => e as HTMLElement)
-          .filter((e) => isVisible(e) && !isLikelyTitle(e));
+          .filter((e) => isVisible(e) && isEditableTextControl(e) && !isLikelyTitle(e));
         if (!candidates.length) return null;
         candidates.sort((a, b) => getRectArea(b) - getRectArea(a));
         return candidates[0] || null;
@@ -769,7 +784,7 @@ export const csdnAdapter: PlatformAdapter = {
           () =>
             queryAllDeep(editorSelectors)
               .map((e) => e as HTMLElement)
-              .find((e) => isVisible(e) && !isLikelyTitle(e)) || null,
+              .find((e) => isVisible(e) && isEditableTextControl(e) && !isLikelyTitle(e)) || null,
           25000
         ).catch(() => null);
         
@@ -779,7 +794,7 @@ export const csdnAdapter: PlatformAdapter = {
         // 打印调试信息
         const allEditors = queryAllDeep(editorSelectors)
           .map((e) => e as HTMLElement)
-          .filter((e) => isVisible(e) && !isLikelyTitle(e));
+          .filter((e) => isVisible(e) && isEditableTextControl(e) && !isLikelyTitle(e));
         console.log('[csdn-fill] All visible editors:', allEditors.map(e => ({
           tag: e.tagName,
           class: e.className?.substring?.(0, 60),
@@ -816,7 +831,7 @@ export const csdnAdapter: PlatformAdapter = {
           // 获取编辑器元素
           const editorForImages = queryAllDeep('[contenteditable="true"], .cm-content, .CodeMirror, textarea')
             .map((e) => e as HTMLElement)
-            .filter((e) => isVisible(e) && !isLikelyTitle(e) && getRectArea(e) > 10000)
+            .filter((e) => isVisible(e) && isEditableTextControl(e) && !isLikelyTitle(e) && getRectArea(e) > 10000)
             .sort((a, b) => getRectArea(b) - getRectArea(a))[0];
 
           if (editorForImages) {

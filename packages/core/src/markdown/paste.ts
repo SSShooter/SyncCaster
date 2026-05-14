@@ -19,6 +19,61 @@ export type RenderMarkdownToHtmlForPasteOptions = {
   forceLegacy?: boolean;
 };
 
+const LINKED_IMAGE_RE = /\[\s*!\[([^\]]*)\]\(([^)]+)\)\s*\]\(([^)]+)\)/g;
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildUrlVariants(url: string): string[] {
+  const raw = String(url || '').trim();
+  if (!raw) return [];
+  const variants = new Set<string>([raw]);
+  variants.add(raw.replace(/^https?:\/\//i, '//'));
+  variants.add(raw.replace(/^https:\/\//i, 'http://'));
+  variants.add(raw.replace(/^http:\/\//i, 'https://'));
+  return Array.from(variants).filter(Boolean);
+}
+
+export function replaceLinkedMarkdownImagesWithPlainImages(markdown: string): string {
+  if (!markdown) return markdown;
+  return markdown.replace(LINKED_IMAGE_RE, (_match, alt: string, imageInner: string) => {
+    return `![${alt}](${String(imageInner || '').trim()})`;
+  });
+}
+
+export function replaceHtmlImagesWithPlaceholders(
+  html: string,
+  replacements: Array<{ url: string; placeholder: string }>
+): string {
+  let next = html || '';
+  if (!next || replacements.length === 0) return next;
+
+  for (const { url, placeholder } of replacements) {
+    if (!url || !placeholder) continue;
+    for (const variant of buildUrlVariants(url)) {
+      const escaped = escapeRegExp(variant);
+      const anchorWrappedImage = new RegExp(
+        `<a\\b[^>]*>\\s*(?:<span\\b[^>]*>\\s*)?<img\\b[^>]*src=["']${escaped}["'][^>]*>(?:\\s*<\\/span>)?\\s*<\\/a>`,
+        'gi'
+      );
+      const imageOnly = new RegExp(`<img\\b[^>]*src=["']${escaped}["'][^>]*>`, 'gi');
+      next = next.replace(anchorWrappedImage, placeholder);
+      next = next.replace(imageOnly, placeholder);
+    }
+  }
+
+  return next;
+}
+
+export function stripEmptyHtmlParagraphs(html: string): string {
+  if (!html) return html;
+  return html
+    .replace(/<(p|div)>\s*(?:&nbsp;|\u00A0|<br\s*\/?>|\s)*<\/\1>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /**
  * 渲染 Markdown 为 HTML（用于平台发布）
  *
@@ -30,7 +85,7 @@ export function renderMarkdownToHtmlForPaste(
   markdown: string,
   options: RenderMarkdownToHtmlForPasteOptions = {}
 ): string {
-  let md = markdown || '';
+  let md = replaceLinkedMarkdownImagesWithPlainImages(markdown || '');
   md = md.replace(/\r\n/g, '\n');
 
   // 处理数学公式
@@ -61,7 +116,7 @@ export function renderMarkdownToHtmlWithAssets(
   markdown: string,
   options: RenderMarkdownToHtmlForPasteOptions = {}
 ): RenderResult {
-  let md = markdown || '';
+  let md = replaceLinkedMarkdownImagesWithPlainImages(markdown || '');
   md = md.replace(/\r\n/g, '\n');
 
   if (options.stripMath) {

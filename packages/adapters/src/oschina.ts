@@ -5,7 +5,7 @@ import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
  * 开源中国适配器
  *
  * 平台特点：
- * - 入口：https://my.oschina.net/u/{userId}/blog/write（需要登录）
+ * - 入口：https://my.oschina.net/u/{userId}/blog/ai-write（需要登录）
  * - 编辑器：支持 HTML 富文本编辑器和 Markdown 模式
  * - 支持：Markdown 格式
  * - 结构：标题 + 正文
@@ -64,6 +64,9 @@ export const oschinaAdapter: PlatformAdapter = {
   dom: {
     matchers: [
       // 开源中国发文页面需要用户 ID，使用通用入口
+      'https://my.oschina.net/blog/ai-write',
+      'https://my.oschina.net/u/*/blog/ai-write',
+      'https://my.oschina.net/*/blog/ai-write',
       'https://my.oschina.net/blog/write',
       'https://my.oschina.net/u/*/blog/write',
       'https://my.oschina.net/*/blog/write',
@@ -86,7 +89,7 @@ export const oschinaAdapter: PlatformAdapter = {
         
         // 确保 userId 是有效的（非空且为纯数字）
         if (userId && userId.trim() && /^\d+$/.test(userId.trim())) {
-          const url = `https://my.oschina.net/u/${userId.trim()}/blog/write`;
+          const url = `https://my.oschina.net/u/${userId.trim()}/blog/ai-write`;
           console.log('[oschina:getEditorUrl] Generated URL:', url);
           return url;
         }
@@ -94,14 +97,14 @@ export const oschinaAdapter: PlatformAdapter = {
         // 兼容特殊 accountId（例如含有其它后缀）：尝试从字符串中提取 userId 数字片段（避免 Date.now() 13位时间戳）
         const m = userId.match(/(?:^|[^0-9])(\d{5,12})(?:[^0-9]|$)/);
         if (m?.[1]) {
-          const url = `https://my.oschina.net/u/${m[1]}/blog/write`;
+          const url = `https://my.oschina.net/u/${m[1]}/blog/ai-write`;
           console.log('[oschina:getEditorUrl] Generated URL (fallback):', url);
           return url;
         }
       }
       // 回退到通用入口（可能会重定向）
       console.log('[oschina:getEditorUrl] Using fallback URL');
-      return 'https://my.oschina.net/blog/write';
+      return 'https://my.oschina.net/blog/ai-write';
     },
     fillAndPublish: async function (payload) {
       console.log('[oschina] fillAndPublish starting', payload);
@@ -111,17 +114,17 @@ export const oschinaAdapter: PlatformAdapter = {
 
       // 检查当前 URL 是否是编辑页面
       const currentUrl = window.location.href;
-      const isEditorPage = /\/blog\/write\b/i.test(currentUrl);
+      const isEditorPage = /\/blog\/(?:ai-)?write\b/i.test(currentUrl);
       
       if (!isEditorPage) {
         console.error('[oschina] 当前页面不是编辑页面，请检查 URL');
-        console.log('[oschina] Expected URL pattern: /blog/write');
+        console.log('[oschina] Expected URL pattern: /blog/ai-write');
         console.log('[oschina] Current URL:', currentUrl);
         
         // 尝试从当前 URL 提取用户 ID 并跳转到编辑页
         const userIdMatch = currentUrl.match(/\/u\/(\d+)/);
         if (userIdMatch?.[1]) {
-          const editorUrl = `https://my.oschina.net/u/${userIdMatch[1]}/blog/write`;
+          const editorUrl = `https://my.oschina.net/u/${userIdMatch[1]}/blog/ai-write`;
           console.log('[oschina] Redirecting to editor page:', editorUrl);
           window.location.href = editorUrl;
           return {

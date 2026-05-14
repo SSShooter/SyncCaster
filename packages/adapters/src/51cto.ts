@@ -1,4 +1,5 @@
 import type { PlatformAdapter } from './base';
+import { replaceLinkedMarkdownImagesWithPlainImages } from '@synccaster/core';
 
 /**
  * 51CTO 适配器
@@ -41,7 +42,7 @@ export const cto51Adapter: PlatformAdapter = {
     // 51CTO 支持标准 Markdown + LaTeX
     return {
       title: post.title,
-      contentMarkdown: post.body_md,
+      contentMarkdown: replaceLinkedMarkdownImagesWithPlainImages(post.body_md || ''),
       tags: post.tags,
       categories: post.categories,
       summary: post.summary,

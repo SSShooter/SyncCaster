@@ -1,5 +1,82 @@
 import type { PlatformAdapter } from './base';
-import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
+import {
+  renderMarkdownToHtmlForPaste,
+  replaceLinkedMarkdownImagesWithPlainImages,
+  replaceHtmlImagesWithPlaceholders,
+} from '@synccaster/core';
+
+export interface WangyihaoEditableCandidateMeta {
+  tagName?: string;
+  className?: string;
+  id?: string;
+  placeholder?: string;
+  ariaLabel?: string;
+  role?: string;
+  width?: number;
+  height?: number;
+  textLength?: number;
+}
+
+const wangyihaoMetaHaystack = (meta: WangyihaoEditableCandidateMeta) =>
+  [
+    meta.tagName,
+    meta.className,
+    meta.id,
+    meta.placeholder,
+    meta.ariaLabel,
+    meta.role,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+export function scoreWangyihaoTitleCandidate(meta: WangyihaoEditableCandidateMeta): number {
+  const haystack = wangyihaoMetaHaystack(meta);
+  const tagName = String(meta.tagName || '').toLowerCase();
+  const height = meta.height || 0;
+  let score = 0;
+
+  if (tagName === 'input' || tagName === 'textarea') score += 90;
+  if (/标题|title|headline/.test(haystack)) score += 170;
+  if (/article-title|title-input|netease-textarea|headline/.test(haystack)) score += 120;
+  if (/drafteditor|public-drafteditor|editor|content/.test(haystack)) score -= 200;
+  if (height > 140) score -= 50;
+  if ((meta.textLength || 0) > 140) score -= 70;
+
+  return score;
+}
+
+export function scoreWangyihaoEditorCandidate(meta: WangyihaoEditableCandidateMeta): number {
+  const haystack = wangyihaoMetaHaystack(meta);
+  const tagName = String(meta.tagName || '').toLowerCase();
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+  const area = width * height;
+  let score = 0;
+
+  if (/drafteditor|public-drafteditor/.test(haystack)) score += 220;
+  if (/drafteditor-root|editorcontainer|article-editor|rich-editor/.test(haystack)) score += 160;
+  if (/editor|content|textbox|article|write/.test(haystack)) score += 80;
+  if (/title|标题|headline/.test(haystack)) score -= 240;
+  if (tagName === 'input' || tagName === 'textarea') score -= 260;
+  score += Math.min(180, Math.round(area / 2500));
+  score += Math.min(40, Math.round((meta.textLength || 0) / 50));
+
+  return score;
+}
+
+export function replaceWangyihaoPlaceholderText(
+  html: string,
+  placeholder: string,
+  replacementHtml: string
+): string {
+  if (!html || !placeholder) return html || '';
+  const escaped = placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return String(html)
+    .replace(new RegExp(`<(?:p|div)[^>]*>\\s*(?:<span[^>]*>\\s*)*${escaped}(?:\\s*<\\/span>)*\\s*<\\/(?:p|div)>`, 'gi'), replacementHtml)
+    .replace(new RegExp(escaped, 'g'), replacementHtml)
+    .replace(/<(?:p|div)[^>]*>\s*<\/(?:p|div)>/gi, '');
+}
 
 /**
  * 网易号适配器
@@ -44,7 +121,7 @@ export const wangyihaoAdapter: PlatformAdapter = {
   async transform(post) {
     // 网易号不支持 LaTeX/表格/代码块/超链接等复杂结构
     // 这里做降级处理，转换为网易号能识别的简单格式
-    let markdown = post.body_md || '';
+    let markdown = replaceLinkedMarkdownImagesWithPlainImages(post.body_md || '');
 
     // 公式降级：转为纯文本
     markdown = markdown.replace(/\$\$([\s\S]+?)\$\$/g, (_m, expr) => `\n${String(expr).trim()}\n`);
@@ -88,14 +165,200 @@ export const wangyihaoAdapter: PlatformAdapter = {
       // 因此必须"完全自包含"，不能依赖模块作用域的函数/变量，否则会在页面里变成 undefined。
       try {
         const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-        const waitFor = async <T>(getter: () => T | null, timeoutMs = 45000): Promise<T> => {
+        const scoreTitleCandidateLocal = (meta: WangyihaoEditableCandidateMeta): number => {
+          const haystack = [
+            meta.tagName,
+            meta.className,
+            meta.id,
+            meta.placeholder,
+            meta.ariaLabel,
+            meta.role,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          const tagName = String(meta.tagName || '').toLowerCase();
+          const height = meta.height || 0;
+          let score = 0;
+
+          if (tagName === 'input' || tagName === 'textarea') score += 90;
+          if (/标题|title|headline/.test(haystack)) score += 170;
+          if (/article-title|title-input|netease-textarea|headline/.test(haystack)) score += 120;
+          if (/drafteditor|public-drafteditor|editor|content/.test(haystack)) score -= 200;
+          if (height > 140) score -= 50;
+          if ((meta.textLength || 0) > 140) score -= 70;
+
+          return score;
+        };
+        const scoreEditorCandidateLocal = (meta: WangyihaoEditableCandidateMeta): number => {
+          const haystack = [
+            meta.tagName,
+            meta.className,
+            meta.id,
+            meta.placeholder,
+            meta.ariaLabel,
+            meta.role,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          const tagName = String(meta.tagName || '').toLowerCase();
+          const width = meta.width || 0;
+          const height = meta.height || 0;
+          const area = width * height;
+          let score = 0;
+
+          if (/drafteditor|public-drafteditor/.test(haystack)) score += 220;
+          if (/drafteditor-root|editorcontainer|article-editor|rich-editor/.test(haystack)) score += 160;
+          if (/editor|content|textbox|article|write/.test(haystack)) score += 80;
+          if (/title|标题|headline/.test(haystack)) score -= 240;
+          if (tagName === 'input' || tagName === 'textarea') score -= 260;
+          score += Math.min(180, Math.round(area / 2500));
+          score += Math.min(40, Math.round((meta.textLength || 0) / 50));
+
+          return score;
+        };
+        const replaceHtmlImagesWithPlaceholdersLocal = (
+          rawHtml: string,
+          replacements: Array<{ url: string; placeholder: string }>
+        ): string => {
+          if (!rawHtml || replacements.length === 0) return rawHtml || '';
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(rawHtml, 'text/html');
+          const replacementMap = new Map(replacements.map((item) => [item.url, item.placeholder] as const));
+          doc.querySelectorAll('img').forEach((img) => {
+            const src = img.getAttribute('src') || '';
+            const placeholder = replacementMap.get(src);
+            if (placeholder) {
+              img.replaceWith(doc.createTextNode(placeholder));
+            }
+          });
+          return doc.body.innerHTML;
+        };
+
+        const isVisible = (el: Element) => {
+          const he = el as HTMLElement;
+          const style = window.getComputedStyle(he);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+          const rect = he.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+
+        const normalizeEditableCandidate = (el: HTMLElement) => {
+          if (el.getAttribute('contenteditable') === 'true' || (el as any).isContentEditable) {
+            return el;
+          }
+          return (el.querySelector('[contenteditable="true"]') as HTMLElement | null) || el;
+        };
+
+        const collectCandidates = (selectors: string[]) => {
+          const seen = new Set<HTMLElement>();
+          const results: HTMLElement[] = [];
+          for (const selector of selectors) {
+            const nodes = Array.from(document.querySelectorAll(selector)) as HTMLElement[];
+            for (const node of nodes) {
+              const candidate = normalizeEditableCandidate(node);
+              if (!candidate || seen.has(candidate) || !isVisible(candidate)) continue;
+              seen.add(candidate);
+              results.push(candidate);
+            }
+          }
+          return results;
+        };
+
+        const buildMeta = (el: HTMLElement): WangyihaoEditableCandidateMeta => {
+          const rect = el.getBoundingClientRect();
+          return {
+            tagName: el.tagName,
+            className: el.className || '',
+            id: el.id || '',
+            placeholder:
+              (el as HTMLInputElement).placeholder ||
+              el.getAttribute('data-placeholder') ||
+              '',
+            ariaLabel: el.getAttribute('aria-label') || '',
+            role: el.getAttribute('role') || '',
+            width: rect.width,
+            height: rect.height,
+            textLength: (el.textContent || '').trim().length,
+          };
+        };
+
+        const waitForBestCandidate = async (
+          selectors: string[],
+          scorer: (el: HTMLElement, meta: WangyihaoEditableCandidateMeta) => number,
+          label: string,
+          timeoutMs = 25000,
+          minScore = 1
+        ) => {
           const start = Date.now();
           while (Date.now() - start < timeoutMs) {
-            const v = getter();
-            if (v) return v;
+            let best: { el: HTMLElement; score: number } | null = null;
+            for (const candidate of collectCandidates(selectors)) {
+              const score = scorer(candidate, buildMeta(candidate));
+              if (!best || score > best.score) {
+                best = { el: candidate, score };
+              }
+            }
+            if (best && best.score >= minScore) return best.el;
             await sleep(200);
           }
-          throw new Error('等待元素超时');
+          throw new Error(`等待 ${label} 超时`);
+        };
+
+        const setNativeValue = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+          const proto = el instanceof HTMLTextAreaElement
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (nativeSetter) nativeSetter.call(el, value);
+          else (el as any).value = value;
+          try {
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
+          } catch {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        };
+
+        const setContentEditableValue = (el: HTMLElement, value: string) => {
+          try {
+            el.focus();
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            selection?.addRange(range);
+            document.execCommand('delete', false);
+            const inserted = document.execCommand('insertText', false, value);
+            if (!inserted) {
+              el.textContent = value;
+            }
+          } catch {
+            el.textContent = value;
+          }
+          try {
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
+          } catch {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        };
+
+        const clearEditable = (editor: HTMLElement) => {
+          try {
+            editor.focus();
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            selection?.addRange(range);
+            document.execCommand('delete', false);
+          } catch {}
+          editor.innerHTML = '';
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
         };
 
         /**
@@ -228,6 +491,23 @@ export const wangyihaoAdapter: PlatformAdapter = {
           return (div.innerText || div.textContent || '').trim();
         };
 
+        const getEditorState = (editor: HTMLElement) => ({
+          textLength: ((editor.innerText || editor.textContent || '').replace(/\s+/g, ' ').trim() || '').length,
+          imageCount: editor.querySelectorAll('img').length,
+        });
+
+        const isEditorFilledEnough = (editor: HTMLElement, expectedTextLength: number) => {
+          const state = getEditorState(editor);
+          const requiredText =
+            expectedTextLength <= 0
+              ? 0
+              : expectedTextLength < 16
+                ? Math.max(1, expectedTextLength - 2)
+                : Math.floor(expectedTextLength * 0.68);
+          const textOk = expectedTextLength === 0 || state.textLength >= requiredText;
+          return textOk;
+        };
+
         /**
          * 模拟粘贴 HTML 内容到编辑器
          * 只触发一次粘贴事件，避免重复填充
@@ -270,19 +550,30 @@ export const wangyihaoAdapter: PlatformAdapter = {
         };
 
         const titleText = String((payload as any).title || '').trim();
-        const html = String((payload as any).contentHtml || '');
+        let html = String((payload as any).contentHtml || '');
         const markdown = String((payload as any).contentMarkdown || '');
 
         // 图片数据（base64）由 background 预下载注入（__downloadedImages），
         // 通过“占位符 → 逐张上传插入”避免把大段 base64 直接粘贴进 Draft.js 导致崩溃。
         const downloadedImages = (payload as any).__downloadedImages as Array<{ url: string; base64: string; mimeType: string }> | undefined;
         const downloadedByUrl = new Map<string, { base64: string; mimeType: string }>();
+        const imagePlaceholders = new Map<string, { url: string; base64: string; mimeType: string }>();
+        const htmlReplacements: Array<{ url: string; placeholder: string }> = [];
+        let preassignedIndex = 0;
         for (const img of downloadedImages || []) {
           if (!img?.url || !img?.base64) continue;
           downloadedByUrl.set(img.url, { base64: img.base64, mimeType: img.mimeType || 'image/png' });
+          preassignedIndex += 1;
+          const placeholder = `[[SC_IMG_${preassignedIndex}]]`;
+          htmlReplacements.push({ url: img.url, placeholder });
+          imagePlaceholders.set(placeholder, {
+            url: img.url,
+            base64: img.base64,
+            mimeType: img.mimeType || 'image/png',
+          });
         }
-        const imagePlaceholders = new Map<string, { url: string; base64: string; mimeType: string }>();
-        let imagePlaceholderCounter = 0;
+        let imagePlaceholderCounter = preassignedIndex;
+        html = replaceHtmlImagesWithPlaceholdersLocal(html, htmlReplacements);
 
         console.log('[wangyihao] 开始填充内容，标题:', titleText?.substring(0, 20));
 
@@ -291,46 +582,39 @@ export const wangyihaoAdapter: PlatformAdapter = {
 
         // 1) 填充标题
         if (titleText) {
-          const titleInput = await waitFor(() => {
-            const neteaseTextarea = document.querySelector('textarea.netease-textarea') as HTMLTextAreaElement;
-            if (neteaseTextarea) return neteaseTextarea;
+          const titleInput = await waitForBestCandidate(
+            [
+              '.article-title textarea',
+              '.article-title input',
+              '.title-input textarea',
+              '.title-input input',
+              'textarea.netease-textarea',
+              'textarea[placeholder*="标题"]',
+              'input[placeholder*="标题"]',
+              '[aria-label*="标题"]',
+              '[name*="title"]',
+              'textarea',
+              'input',
+            ],
+            (_el, meta) => scoreTitleCandidateLocal(meta),
+            '网易号标题输入框',
+            15000,
+            30
+          );
 
-            const textareas = Array.from(document.querySelectorAll('textarea')) as HTMLTextAreaElement[];
-            const candidates = textareas.filter((ta) => {
-              const placeholder = ta.placeholder || '';
-              return /标题/i.test(placeholder);
-            });
-            if (candidates.length > 0) return candidates[0];
-
-            const inputs = Array.from(document.querySelectorAll('input')) as HTMLInputElement[];
-            const inputCandidates = inputs.filter((i) => {
-              const attrs = [i.placeholder || '', i.getAttribute('aria-label') || '', i.name || '', i.id || '', i.className || ''].join(' ');
-              return /标题|title/i.test(attrs);
-            });
-            return inputCandidates[0] || null;
-          }, 10000);
-
-          if (titleInput) {
-            titleInput.focus();
-            const isTextarea = titleInput.tagName.toLowerCase() === 'textarea';
-            const proto = isTextarea ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-            const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-            if (nativeSetter) {
-              nativeSetter.call(titleInput, titleText);
-            } else {
-              (titleInput as any).value = titleText;
-            }
-            try {
-              titleInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: titleText, inputType: 'insertText' }));
-            } catch {
-              titleInput.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-            titleInput.dispatchEvent(new Event('change', { bubbles: true }));
-            titleInput.dispatchEvent(new Event('blur', { bubbles: true }));
-            console.log('[wangyihao] 标题填充成功');
+          if (titleInput instanceof HTMLInputElement || titleInput instanceof HTMLTextAreaElement) {
+            setNativeValue(titleInput, titleText);
           } else {
-            console.log('[wangyihao] 未找到标题输入框');
+            setContentEditableValue(titleInput, titleText);
           }
+          const titleValue =
+            titleInput instanceof HTMLInputElement || titleInput instanceof HTMLTextAreaElement
+              ? titleInput.value
+              : titleInput.textContent || '';
+          if (titleValue.trim().length < Math.max(1, Math.floor(titleText.length * 0.75))) {
+            throw new Error('网易号标题未能成功填充');
+          }
+          console.log('[wangyihao] 标题填充成功');
           await sleep(500);
         }
 
@@ -345,55 +629,22 @@ export const wangyihaoAdapter: PlatformAdapter = {
         console.log('[wangyihao] 处理后的 HTML:', contentHtml.substring(0, 500));
 
         // 查找 Draft.js 编辑器
-        const editor = await waitFor(() => {
-          // Draft.js 常见：.public-DraftEditor-content
-          const draftEditor = document.querySelector('.public-DraftEditor-content') as HTMLElement | null;
-          if (draftEditor) {
-            if (draftEditor.getAttribute('contenteditable') === 'true' || (draftEditor as any).isContentEditable) return draftEditor;
-            const ce = draftEditor.closest('[contenteditable="true"]') as HTMLElement | null;
-            if (ce) return ce;
-            return draftEditor;
-          }
-
-          // Draft.js 内部常见：data-contents="true"
-          const dataContents = document.querySelector('[data-contents="true"]') as HTMLElement | null;
-          if (dataContents) {
-            const ce = dataContents.closest('[contenteditable="true"]') as HTMLElement | null;
-            if (ce) return ce;
-          }
-
-          // 网易号可能使用其他编辑器容器
-          const draftRoot = document.querySelector('.DraftEditor-root') as HTMLElement | null;
-          if (draftRoot) {
-            const content = draftRoot.querySelector('[contenteditable="true"]') as HTMLElement | null;
-            if (content) return content;
-          }
-
-          // 更通用的可编辑文本框
-          const roleTextbox = document.querySelector('[role="textbox"][contenteditable="true"]') as HTMLElement | null;
-          if (roleTextbox) return roleTextbox;
-
-          // 查找其他 contenteditable 元素
-          const candidates = Array.from(document.querySelectorAll('[contenteditable="true"]')) as HTMLElement[];
-          const filtered = candidates.filter((el) => {
-            const className = el.className || '';
-            const parentClassName = el.parentElement?.className || '';
-            // 排除标题输入框
-            if (/title|标题/i.test(className) || /title|标题/i.test(parentClassName)) return false;
-            // 排除不可见元素
-            const style = window.getComputedStyle(el);
-            if (style.display === 'none' || style.visibility === 'hidden') return false;
-            const rect = el.getBoundingClientRect();
-            if (rect.width < 200 || rect.height < 50) return false;
-            return true;
-          });
-          filtered.sort((a, b) => {
-            const ra = a.getBoundingClientRect();
-            const rb = b.getBoundingClientRect();
-            return rb.width * rb.height - ra.width * ra.height;
-          });
-          return filtered[0] || null;
-        }, 30000);
+        const editor = await waitForBestCandidate(
+          [
+            '.article-editor .public-DraftEditor-content [contenteditable="true"]',
+            '.article-editor .DraftEditor-root [contenteditable="true"]',
+            '.DraftEditor-root [contenteditable="true"]',
+            '.DraftEditor-editorContainer [contenteditable="true"]',
+            '.public-DraftEditor-content [contenteditable="true"]',
+            '.public-DraftEditor-content',
+            '[data-contents="true"]',
+            '[role="textbox"][contenteditable="true"]',
+          ],
+            (_el, meta) => scoreEditorCandidateLocal(meta),
+          '网易号正文编辑器',
+          30000,
+          60
+        );
 
         if (editor) {
           // 聚焦编辑器
@@ -429,38 +680,65 @@ export const wangyihaoAdapter: PlatformAdapter = {
 
           console.log('[wangyihao] 编辑器已聚焦，开始填充内容');
 
+          const expectedTextLength = plainText.trim().length;
           let filled = false;
 
-          // 方法1：模拟粘贴事件（Draft.js 需要通过粘贴事件来正确处理内容）
-          try {
-            simulatePasteHtml(editor, contentHtml, plainText);
-            await sleep(500);
-
-            const textLen = (editor.textContent || '').trim().length;
-            if (textLen >= 10) {
-              console.log('[wangyihao] 粘贴事件填充成功，内容长度:', textLen);
-              filled = true;
-            }
-          } catch (e) {
-            console.log('[wangyihao] 粘贴事件填充失败:', e);
-          }
-
-          // 方法2：使用 execCommand insertText 作为备选
-          if (!filled) {
-            try {
+          const fillStrategies = [
+            async () => {
+              clearEditable(editor);
+              simulatePasteHtml(editor, contentHtml, plainText);
+              await sleep(500);
+            },
+            async () => {
+              clearEditable(editor);
               editor.focus();
-              await sleep(100);
-              
-              document.execCommand('insertText', false, plainText);
+              const inserted = document.execCommand('insertHTML', false, contentHtml);
+              if (!inserted) {
+                editor.innerHTML = contentHtml;
+              }
+              try {
+                editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste' }));
+              } catch {
+                editor.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              editor.dispatchEvent(new Event('change', { bubbles: true }));
+              await sleep(350);
+            },
+            async () => {
+              clearEditable(editor);
+              editor.innerHTML = contentHtml;
+              try {
+                editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste' }));
+              } catch {
+                editor.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              editor.dispatchEvent(new Event('change', { bubbles: true }));
               await sleep(300);
+            },
+            async () => {
+              clearEditable(editor);
+              editor.focus();
+              document.execCommand('insertText', false, plainText);
+              try {
+                editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: plainText, inputType: 'insertText' }));
+              } catch {
+                editor.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              await sleep(300);
+            },
+          ];
 
-              const textLen = (editor.textContent || '').trim().length;
-              if (textLen >= 10) {
-                console.log('[wangyihao] insertText 填充成功，内容长度:', textLen);
+          for (const strategy of fillStrategies) {
+            try {
+              await strategy();
+              if (isEditorFilledEnough(editor, expectedTextLength)) {
+                const state = getEditorState(editor);
+                console.log('[wangyihao] 正文填充成功，内容长度:', state.textLength);
                 filled = true;
+                break;
               }
             } catch (e) {
-              console.log('[wangyihao] insertText 填充失败:', e);
+              console.log('[wangyihao] 正文填充策略失败:', e);
             }
           }
 
@@ -564,29 +842,13 @@ export const wangyihaoAdapter: PlatformAdapter = {
                 editor.focus();
                 await sleep(80);
 
-                // 优先 drop，不行再 paste，最后尝试 input[type=file]
-                tryDrop();
+                // 优先 paste，尽量复用与头条/知乎一致的上传路径；不行再退回 drop
+                tryPaste();
                 let result = await waitForNewImageUrl(editor, beforeUrls, 20000);
 
                 if (!result.url) {
-                  tryPaste();
+                  tryDrop();
                   result = await waitForNewImageUrl(editor, beforeUrls, 20000);
-                }
-
-                if (!result.url) {
-                  const inputs = Array.from(document.querySelectorAll('input[type="file"]')) as HTMLInputElement[];
-                  const imageInput = inputs.find((i) => {
-                    const accept = (i.accept || '').toLowerCase();
-                    return accept.includes('image') || accept === '' || accept === '*/*';
-                  });
-                  if (imageInput) {
-                    try {
-                      (imageInput as any).files = dt.files;
-                      imageInput.dispatchEvent(new Event('change', { bubbles: true }));
-                      imageInput.dispatchEvent(new Event('input', { bubbles: true }));
-                      result = await waitForNewImageUrl(editor, beforeUrls, 25000);
-                    } catch {}
-                  }
                 }
 
                 return result;
@@ -596,10 +858,26 @@ export const wangyihaoAdapter: PlatformAdapter = {
               }
             };
 
-            const replacePlaceholderWithImage = async (
-              placeholder: string,
-              image: { url: string; base64: string; mimeType: string }
-            ) => {
+            const removePlaceholderFromEditor = (root: HTMLElement, placeholder: string) => {
+              let changed = false;
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+              let textNode: Text | null;
+              while ((textNode = walker.nextNode() as Text | null)) {
+                if (!textNode?.textContent?.includes(placeholder)) continue;
+                textNode.textContent = textNode.textContent.split(placeholder).join('');
+                changed = true;
+              }
+
+              if (changed) {
+                root.normalize();
+                root.dispatchEvent(new Event('input', { bubbles: true }));
+                root.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+
+              return changed;
+            };
+
+            const placeCaretForPlaceholder = async (placeholder: string) => {
               const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
               let node: Text | null;
               while ((node = walker.nextNode() as Text)) {
@@ -619,19 +897,35 @@ export const wangyihaoAdapter: PlatformAdapter = {
                 sel?.addRange(range);
                 await sleep(80);
 
-                document.execCommand('delete', false);
-                await sleep(120);
-
-                const result = await uploadImageAtCursor(image.base64, image.mimeType);
-                if (result.url) return true;
-
-                // 失败时恢复占位符，避免内容丢失
                 try {
-                  document.execCommand('insertText', false, placeholder);
+                  document.execCommand('delete', false);
                 } catch {}
-                return false;
+                await sleep(120);
+                return true;
               }
 
+              return false;
+            };
+
+            const replacePlaceholderWithImage = async (
+              placeholder: string,
+              image: { url: string; base64: string; mimeType: string }
+            ) => {
+              const placed = await placeCaretForPlaceholder(placeholder);
+              if (!placed) return false;
+
+              const result = await uploadImageAtCursor(image.base64, image.mimeType);
+              if (result.url) {
+                try {
+                  removePlaceholderFromEditor(editor, placeholder);
+                } catch {}
+                return true;
+              }
+
+              // 失败时恢复占位符，避免内容丢失
+              try {
+                document.execCommand('insertText', false, placeholder);
+              } catch {}
               return false;
             };
 
@@ -664,6 +958,7 @@ export const wangyihaoAdapter: PlatformAdapter = {
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 6500);
             console.log('[wangyihao] 正文自动填充失败');
+            throw new Error('网易号正文自动填充失败');
           }
 
           await sleep(300);

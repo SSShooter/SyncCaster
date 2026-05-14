@@ -1024,9 +1024,9 @@ const tencentCloudDetector: PlatformAuthDetector = {
           const data = await res.json();
           if ((data.code === 0 || data.ret === 0) && data.data) {
             const user = data.data;
-            const userId = String(user.uin || user.uid || user.id || '');
-            const nickname = user.name || user.nickname || user.nick;
-            
+            const userId = String(user.creatorId || user.authorId || user.developerId || user.uid || user.userId || user.id || '');
+            const nickname = user.name || user.nickname || user.nick || user.userName || user.username;
+
             if (userId) {
               log('tencent-cloud', '从 API 获取到用户信息', { userId, nickname });
               const apiState: LoginState = {
@@ -1062,6 +1062,7 @@ const tencentCloudDetector: PlatformAuthDetector = {
                 if (bg?.loggedIn) {
                   return {
                     ...bg,
+                    userId: bg.userId || merged.userId,
                     nickname: merged.nickname || bg.nickname,
                     avatar: merged.avatar || bg.avatar,
                   };
@@ -1105,6 +1106,7 @@ const tencentCloudDetector: PlatformAuthDetector = {
       const avatarFromDom = await waitForValue(() => getAvatarFromDom(), { timeoutMs: 1500 });
       return {
         ...bg,
+        userId: bg.userId,
         nickname: nicknameFromDom || bg.nickname,
         avatar: avatarFromDom || bg.avatar,
       };
@@ -2222,6 +2224,52 @@ const oschinaDetector: PlatformAuthDetector = {
           return { nickname, avatar, userId };
         }
       }
+
+      const rightPanelScope =
+        document.querySelector('.right-panel .user-info') ||
+        document.querySelector('.user-sidebar .user-info') ||
+        document.querySelector('.user-info .info-left')?.closest('.user-info') ||
+        document.querySelector('.my-layout .right-panel .user-info');
+
+      if (rightPanelScope) {
+        const scope = rightPanelScope as HTMLElement;
+        const idContainer = scope.closest('[id]');
+        const idCandidate = idContainer?.getAttribute('id') || '';
+        if (/^\d{3,24}$/.test(idCandidate)) {
+          userId = idCandidate;
+        }
+
+        const nicknameCandidates = [
+          scope.querySelector('.info-left h3'),
+          scope.querySelector('.user-info .info-left h3'),
+          scope.querySelector('h3'),
+        ];
+        for (const node of nicknameCandidates) {
+          const text = readTextFromEl(node);
+          if (isValidNickname(text)) {
+            nickname = text!.trim();
+            break;
+          }
+        }
+
+        // 新版页面头像可能是 ant-avatar 首字母占位，没有真实 img/src。
+        const avatarNode = scope.querySelector('.ant-avatar img, img');
+        const avatarUrl = readAvatarUrlFromEl(avatarNode);
+        if (
+          avatarUrl &&
+          avatarUrl.includes('http') &&
+          !avatarUrl.includes('default') &&
+          !avatarUrl.includes('placeholder') &&
+          !avatarUrl.includes('logo') &&
+          !avatarUrl.includes('icon')
+        ) {
+          avatar = avatarUrl;
+        }
+
+        if (userId || nickname || avatar) {
+          return { nickname, avatar, userId };
+        }
+      }
       
       // 1. 尝试从导航栏用户区域提取（最可靠）
       // 开源中国的用户下拉菜单通常在页面顶部
@@ -2355,12 +2403,29 @@ const oschinaDetector: PlatformAuthDetector = {
 
         // 对齐 background 的严格判定：当后台明确未登录/已登出时，不能继续使用页面上可能误抓到的昵称。
         if (bg && !bg.loggedIn) {
-          if (bg.errorType === 'logged_out') {
+          const urlUserId = (() => {
+            const match = url.match(/my\.oschina\.net\/u\/(\d+)/i) || url.match(/\/u\/(\d+)/i);
+            return match?.[1];
+          })();
+          const hasLocalProfileEvidence = !!(local.userId || local.nickname || local.avatar);
+
+          if (bg.errorType === 'logged_out' && !(urlUserId && hasLocalProfileEvidence)) {
             return { loggedIn: false, platform: 'oschina' };
           }
           // 对于“无法确认”的情况，尽量不要误报为已登录；如果本地没有强证据（userId）则按未登录处理。
-          if (!local.userId) {
+          if (!local.userId && !urlUserId) {
             return { loggedIn: false, platform: 'oschina' };
+          }
+
+          if (urlUserId && hasLocalProfileEvidence) {
+            return {
+              loggedIn: true,
+              platform: 'oschina',
+              userId: local.userId || urlUserId,
+              nickname: local.nickname || '开源中国用户',
+              avatar: local.avatar,
+              meta: local.meta,
+            };
           }
         }
 
@@ -2398,24 +2463,8 @@ const oschinaDetector: PlatformAuthDetector = {
         nickname: local.nickname || '开源中国用户',
       };
     };
-    
-    // 1. 检查是否在登录页面
-    if (url.includes('/home/login') || url.includes('/login')) {
-      // 检查是否有登录成功的迹象（可能是登录后的重定向）
-      const domUser = extractUserFromDom();
-      if (domUser.userId || domUser.nickname) {
-        log('oschina', '在登录页但检测到用户信息，可能已登录', domUser);
-        return await reconcileWithBackground({
-          loggedIn: true,
-          platform: 'oschina',
-          userId: domUser.userId,
-          nickname: domUser.nickname || '开源中国用户',
-          avatar: domUser.avatar,
-        });
-      }
-      log('oschina', '在登录页面，未检测到登录状态');
-      return { loggedIn: false, platform: 'oschina' };
-    }
+
+    const isLegacyLoginPage = url.includes('/home/login') || url.includes('/login');
     
     // 2. 检查全局变量
     const win = window as any;
@@ -2517,6 +2566,19 @@ const oschinaDetector: PlatformAuthDetector = {
         avatar: domUser.avatar,
       });
     }
+
+    if (url.includes('my.oschina.net/u/')) {
+      const urlUserId = url.match(/my\.oschina\.net\/u\/(\d+)/i)?.[1] || url.match(/\/u\/(\d+)/i)?.[1];
+      if (urlUserId) {
+        log('oschina', '从个人中心 URL 检测到登录证据', { urlUserId });
+        return await reconcileWithBackground({
+          loggedIn: true,
+          platform: 'oschina',
+          userId: urlUserId,
+          nickname: '开源中国用户',
+        });
+      }
+    }
     
     // 5. 检查登录/退出按钮
     // 如果有退出按钮，说明已登录
@@ -2591,7 +2653,12 @@ const oschinaDetector: PlatformAuthDetector = {
         nickname: bg.nickname || '开源中国用户',
       };
     }
-    
+
+    if (isLegacyLoginPage) {
+      log('oschina', '停留在旧登录页且无其他登录证据，判定为未登录');
+      return { loggedIn: false, platform: 'oschina' };
+    }
+
     if (hasLoginBtn) {
       log('oschina', '检测到登录按钮且无其他登录迹象，判定为未登录');
       return { loggedIn: false, platform: 'oschina' };

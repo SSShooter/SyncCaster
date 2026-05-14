@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildAssetManifestFromPost } from '../manifest';
 import type { CanonicalPost } from '../../types';
+import extensionManifest, { getManifest } from '../../../../../apps/extension/src/manifest';
 
 const PNG_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -90,6 +91,11 @@ describe('buildAssetManifestFromPost', () => {
     const manifest = buildAssetManifestFromPost(post);
     expect(manifest.images).toHaveLength(1);
     expect(manifest.images[0].originalUrl).toBe('https://example.com/a.png');
+  });
+
+  it('keeps production manifest version aligned with getManifest export', () => {
+    expect(extensionManifest.version).toBe(getManifest('production').version);
+    expect(extensionManifest.version).toBe('2.0.7');
   });
 });
 
