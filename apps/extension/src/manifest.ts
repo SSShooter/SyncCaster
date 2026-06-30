@@ -79,6 +79,12 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
       'clipboardWrite',
     ],
 
+    optional_host_permissions: [
+      'https://*/*',
+      'http://localhost/*',
+      'http://127.0.0.1/*',
+    ],
+
     // 主机权限（全部平台）
     host_permissions: [
       // favicon（用于账号管理页的平台图标显示）
