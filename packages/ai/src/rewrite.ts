@@ -13,6 +13,14 @@ function createCandidateId(index: number): string {
   return `candidate-${index + 1}`;
 }
 
+function safelyPreCleanAiCliches(markdown: string): string {
+  try {
+    return preCleanAiCliches(markdown);
+  } catch {
+    return markdown;
+  }
+}
+
 export function parseRewriteCandidates(content: string): AiRewriteCandidate[] {
   let parsed: unknown;
   try {
@@ -48,7 +56,7 @@ export async function generateRewriteCandidates(
 ): Promise<AiRewriteResult> {
   const source = {
     ...request.source,
-    bodyMd: preCleanAiCliches(request.source.bodyMd),
+    bodyMd: safelyPreCleanAiCliches(request.source.bodyMd),
   };
   const raw = await createChatCompletion(
     request.provider,
@@ -56,6 +64,7 @@ export async function generateRewriteCandidates(
       source,
       style: request.style,
       rewritePrompt: request.rewritePrompt,
+      humanizeLevel: request.humanizeLevel,
       candidateCount: request.candidateCount,
     }),
     fetchImpl,

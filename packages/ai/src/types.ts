@@ -1,4 +1,5 @@
 export type AiRewriteStyle = 'balanced' | 'less_ai' | 'platform_ready';
+export type AiHumanizeLevel = 'light' | 'standard' | 'strong';
 
 export interface AiRewritePromptTemplate {
   id: string;
@@ -25,6 +26,7 @@ export interface AiRewritePromptInput {
   source: AiRewriteSource;
   style?: AiRewriteStyle;
   rewritePrompt?: AiRewritePromptTemplate;
+  humanizeLevel?: AiHumanizeLevel;
   candidateCount: 1 | 2 | 3;
 }
 

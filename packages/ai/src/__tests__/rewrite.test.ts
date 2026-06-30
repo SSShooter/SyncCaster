@@ -109,4 +109,44 @@ describe('generateRewriteCandidates', () => {
     await expect(request).rejects.toMatchObject({ code: 'canceled' });
     expect(requestSignal?.aborted).toBe(true);
   });
+
+  it('passes the requested humanize level to the provider prompt', async () => {
+    let body: any;
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: '{"candidates":[{"title":"Candidate","bodyMd":"Body","style":"balanced"}]}',
+              },
+            },
+          ],
+        }),
+      });
+    });
+
+    await generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: 'Original body',
+        },
+        humanizeLevel: 'strong',
+        candidateCount: 1,
+      },
+      fetchImpl as any
+    );
+
+    expect(JSON.stringify(body.messages)).toContain('Humanize level: strong');
+  });
 });

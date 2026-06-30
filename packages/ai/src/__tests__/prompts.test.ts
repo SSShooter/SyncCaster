@@ -41,4 +41,27 @@ describe('buildRewriteMessages', () => {
 
     expect(messages[1].content).toContain('Return exactly 1 candidates');
   });
+
+  it('uses standard humanize instructions by default', () => {
+    const messages = buildRewriteMessages({
+      source: { postId: 'p1', title: '标题', bodyMd: '正文' },
+      candidateCount: 1,
+    });
+
+    const content = messages.map((item) => item.content).join('\n');
+    expect(content).toContain('Humanize level: standard');
+    expect(content).toContain('sentence rhythm');
+  });
+
+  it('adds stronger humanize instructions when requested', () => {
+    const messages = buildRewriteMessages({
+      source: { postId: 'p1', title: '标题', bodyMd: '正文' },
+      candidateCount: 1,
+      humanizeLevel: 'strong',
+    });
+
+    const content = messages.map((item) => item.content).join('\n');
+    expect(content).toContain('Humanize level: strong');
+    expect(content).toContain('more aggressive');
+  });
 });

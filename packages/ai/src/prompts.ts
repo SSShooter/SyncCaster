@@ -1,4 +1,4 @@
-import type { AiRewritePromptInput, ChatMessage } from './types';
+import type { AiHumanizeLevel, AiRewritePromptInput, ChatMessage } from './types';
 
 export const DEFAULT_REWRITE_PROMPT = {
   id: 'general',
@@ -10,12 +10,41 @@ export const DEFAULT_REWRITE_PROMPT = {
   ].join('\n'),
 };
 
-export const HUMANIZE_REQUIREMENT = [
-  'Always rewrite and remove AI-written flavor in the same pass.',
-  'Avoid formulaic transitions, generic conclusions, hollow praise, and over-neat parallel phrasing.',
-  'Vary sentence length and rhythm. Prefer concrete, natural, practical wording.',
-  'Keep technical facts, links, code blocks, tables, dates, numbers, and Markdown structure intact.',
-].join(' ');
+export const DEFAULT_HUMANIZE_LEVEL: AiHumanizeLevel = 'standard';
+
+export const HUMANIZE_REQUIREMENTS: Record<AiHumanizeLevel, string[]> = {
+  light: [
+    'Humanize level: light.',
+    'Remove obvious AI-written flavor without changing the article voice too much.',
+    'Avoid formulaic transitions, generic conclusions, hollow praise, and over-neat parallel phrasing.',
+  ],
+  standard: [
+    'Humanize level: standard.',
+    'Rewrite and remove AI-written flavor in the same pass.',
+    'Vary sentence rhythm and sentence structure. Break overly even pacing.',
+    'Detemplate stiff transitions such as firstly, secondly, in summary, meanwhile, and more importantly.',
+    'Trim hollow summaries, repeated paraphrases, and correct-but-low-information filler.',
+    'Prefer concrete, natural, practical wording.',
+  ],
+  strong: [
+    'Humanize level: strong.',
+    'Use more aggressive naturalization while still preserving facts and structure.',
+    'Break mechanical sentence rhythm, reduce list-like symmetry, and avoid polished AI-style slogans.',
+    'Rewrite stiff transitions into natural thought flow or remove them when context is already clear.',
+    'Remove hollow wrap-up paragraphs and generic calls to action unless they carry real information.',
+    'Use a more human editorial voice, but do not invent personal experience, facts, data, or references.',
+  ],
+};
+
+export function normalizeHumanizeLevel(value: unknown): AiHumanizeLevel {
+  return value === 'light' || value === 'standard' || value === 'strong'
+    ? value
+    : DEFAULT_HUMANIZE_LEVEL;
+}
+
+function getHumanizeRequirement(level: unknown): string {
+  return HUMANIZE_REQUIREMENTS[normalizeHumanizeLevel(level)].join(' ');
+}
 
 const legacyStyleDescriptions = {
   balanced: 'Rewrite for clarity, structure, and readability while preserving meaning.',
@@ -38,12 +67,14 @@ function getRewritePrompt(input: AiRewritePromptInput) {
 
 export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[] {
   const rewritePrompt = getRewritePrompt(input);
+  const humanizeLevel = normalizeHumanizeLevel(input.humanizeLevel);
+  const humanizeRequirement = getHumanizeRequirement(humanizeLevel);
   return [
     {
       role: 'system',
       content: [
         'You are an editorial rewriting assistant.',
-        HUMANIZE_REQUIREMENT,
+        humanizeRequirement,
         'Preserve facts, technical meaning, links, code blocks, and Markdown structure.',
         'Do not invent claims, dates, data, or references.',
         'Return only valid JSON.',
@@ -53,6 +84,7 @@ export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[]
       role: 'user',
       content: [
         `Rewrite template: ${rewritePrompt.name}`,
+        `Humanize level: ${humanizeLevel}`,
         'Rewrite prompt:',
         rewritePrompt.prompt,
         `Return exactly ${input.candidateCount} candidates.`,
