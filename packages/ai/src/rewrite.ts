@@ -1,0 +1,62 @@
+import { createChatCompletion, type AiFetch } from './openai-compatible';
+import { buildRewriteMessages } from './prompts';
+import { AiProviderError, type AiRewriteCandidate, type AiRewriteRequest, type AiRewriteResult } from './types';
+
+function stripJsonFence(content: string): string {
+  const trimmed = content.trim();
+  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  return match ? match[1].trim() : trimmed;
+}
+
+function createCandidateId(index: number): string {
+  return `candidate-${index + 1}`;
+}
+
+export function parseRewriteCandidates(content: string): AiRewriteCandidate[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonFence(content));
+  } catch {
+    throw new AiProviderError('invalid_response', 'AI response was not valid candidate JSON.');
+  }
+
+  const candidates = (parsed as { candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates)) {
+    throw new AiProviderError('invalid_response', 'AI response did not include candidates.');
+  }
+
+  return candidates.map((candidate, index) => {
+    const item = candidate as Partial<AiRewriteCandidate>;
+    if (typeof item.title !== 'string' || typeof item.bodyMd !== 'string') {
+      throw new AiProviderError('invalid_response', 'AI candidate was missing title or bodyMd.');
+    }
+    return {
+      id: item.id || createCandidateId(index),
+      title: item.title,
+      bodyMd: item.bodyMd,
+      summary: item.summary,
+      rationale: item.rationale,
+      style: item.style || 'balanced',
+    };
+  });
+}
+
+export async function generateRewriteCandidates(
+  request: AiRewriteRequest,
+  fetchImpl: AiFetch = fetch
+): Promise<AiRewriteResult> {
+  const raw = await createChatCompletion(
+    request.provider,
+    buildRewriteMessages({
+      source: request.source,
+      style: request.style,
+      candidateCount: request.candidateCount,
+    }),
+    fetchImpl
+  );
+
+  return {
+    raw,
+    candidates: parseRewriteCandidates(raw),
+  };
+}
