@@ -83,6 +83,12 @@ import { computed, onMounted, ref } from 'vue';
 import { db } from '@synccaster/core';
 import { useMessage } from 'naive-ui';
 import { aiClient } from '../ai/client';
+import {
+  buildRewriteDraft,
+  buildSelectedRewriteDraft,
+  getRewriteDraft,
+  mergePostMetaWithRewriteDraft,
+} from '../ai/rewrite-draft';
 
 defineProps<{ isDark?: boolean }>();
 
@@ -120,7 +126,12 @@ async function loadPost() {
       return;
     }
     const configResponse = await aiClient.getConfig();
-    style.value = configResponse.config.defaultStyle || 'balanced';
+    const draft = getRewriteDraft(post.value);
+    style.value = draft?.style || configResponse.config.defaultStyle || 'balanced';
+    if (draft) {
+      candidates.value = draft.candidates;
+      selectedId.value = draft.selectedCandidateId || draft.candidates[0]?.id || '';
+    }
   } catch (error: any) {
     message.error(error?.message || '加载 AI 文案页失败');
   } finally {
@@ -145,6 +156,20 @@ async function generate() {
     });
     candidates.value = response.result.candidates;
     selectedId.value = candidates.value[0]?.id || '';
+    const draft = buildRewriteDraft({
+      style: style.value,
+      candidates: candidates.value,
+      selectedCandidateId: selectedId.value,
+      generatedAt: new Date().toISOString(),
+    });
+    const meta = mergePostMetaWithRewriteDraft(post.value.meta, draft);
+    await db.posts.update(post.value.id, {
+      meta,
+    } as any);
+    post.value = {
+      ...post.value,
+      meta,
+    };
   } catch (error: any) {
     message.error(error?.message || 'AI 生成失败');
   } finally {
@@ -160,6 +185,11 @@ async function useSelected() {
   saving.value = true;
   try {
     const now = Date.now();
+    const draft = buildSelectedRewriteDraft({
+      candidate: selectedCandidate.value,
+      style: style.value,
+      generatedAt: new Date(now).toISOString(),
+    });
     await db.posts.update(post.value.id, {
       title: selectedCandidate.value.title,
       body_md: selectedCandidate.value.bodyMd,
@@ -172,6 +202,7 @@ async function useSelected() {
           style: selectedCandidate.value.style,
           modelGeneratedAt: new Date(now).toISOString(),
         },
+        aiRewriteDraft: draft,
       },
     } as any);
     window.location.hash = `editor/${post.value.id}`;
