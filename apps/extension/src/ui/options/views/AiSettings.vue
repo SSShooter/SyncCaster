@@ -45,6 +45,14 @@
           </n-radio-group>
         </n-form-item>
 
+        <n-form-item label="去 AI 味强度">
+          <n-radio-group v-model:value="form.humanizeLevel">
+            <n-radio-button value="light">轻度</n-radio-button>
+            <n-radio-button value="standard">标准</n-radio-button>
+            <n-radio-button value="strong">强力</n-radio-button>
+          </n-radio-group>
+        </n-form-item>
+
         <n-form-item label="默认提示词">
           <n-select
             :key="rewritePromptOptionsKey"
@@ -130,6 +138,7 @@ const form = reactive({
   temperature: 0.4,
   timeoutMs: 180000,
   candidateCount: 2,
+  humanizeLevel: 'standard',
   rewritePrompts: [
     {
       id: 'general',
