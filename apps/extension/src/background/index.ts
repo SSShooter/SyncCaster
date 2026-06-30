@@ -17,6 +17,7 @@ import {
   startJob as startManagedJob,
 } from './job-service';
 import { initNativeAgentBridge } from './native-agent-bridge';
+import { handleAiMessage, isAiMessageType } from './ai-service';
 
 const logger = new Logger('background');
 
@@ -224,6 +225,10 @@ async function saveCollectedPost(data: any) {
  * 处理消息
  */
 async function handleMessage(message: any, sender: chrome.runtime.MessageSender) {
+  if (isAiMessageType(message.type)) {
+    return await handleAiMessage(message);
+  }
+
   switch (message.type) {
     case 'CREATE_JOB':
       return await createManagedJob(message.data);
