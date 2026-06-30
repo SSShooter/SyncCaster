@@ -1,5 +1,7 @@
 import {
   generateRewriteCandidates,
+  normalizeHumanizeLevel,
+  type AiHumanizeLevel,
   type AiProviderConfig,
   type AiRewriteCandidate,
   type AiRewritePromptTemplate,
@@ -12,6 +14,7 @@ export interface ForegroundRewriteConfig {
   temperature: number;
   timeoutMs?: number;
   candidateCount: 1 | 2 | 3;
+  humanizeLevel?: AiHumanizeLevel;
   rewritePrompts?: AiRewritePromptTemplate[];
   defaultRewritePromptId?: string;
 }
@@ -64,6 +67,7 @@ export interface GenerateOneCandidateInput {
   provider: AiProviderConfig;
   source: AiRewriteSource;
   rewritePrompt: AiRewritePromptTemplate | undefined;
+  humanizeLevel?: AiHumanizeLevel;
   candidateIndex: number;
   signal?: AbortSignal;
 }
@@ -117,6 +121,7 @@ async function defaultGenerateOneCandidate(input: GenerateOneCandidateInput) {
     provider: input.provider,
     source: input.source,
     rewritePrompt: input.rewritePrompt,
+    humanizeLevel: input.humanizeLevel,
     candidateCount: 1,
     signal: input.signal,
   });
@@ -149,6 +154,7 @@ export async function runForegroundRewriteCandidates(input: RunForegroundRewrite
     timeoutMs: getForegroundTimeoutMs(input.config.timeoutMs),
   };
   const rewritePrompt = resolveRewritePrompt(input.config, input.rewritePromptId);
+  const humanizeLevel = normalizeHumanizeLevel(input.config.humanizeLevel);
   const generateOneCandidate = input.generateOneCandidate || defaultGenerateOneCandidate;
 
   emit('started');
@@ -169,6 +175,7 @@ export async function runForegroundRewriteCandidates(input: RunForegroundRewrite
         provider,
         source: input.source,
         rewritePrompt,
+        humanizeLevel,
         candidateIndex: index,
         signal: input.signal,
       });

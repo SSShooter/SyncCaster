@@ -93,6 +93,32 @@ describe('runForegroundRewriteCandidates', () => {
     ]);
   });
 
+  it('passes the configured humanize level into candidate generation', async () => {
+    const generateOneCandidate = vi.fn().mockResolvedValue({
+      raw: '{"candidates":[{"title":"One","bodyMd":"Body one","style":"general"}]}',
+      candidates: [{ id: 'candidate-1', title: 'One', bodyMd: 'Body one', style: 'general' }],
+    });
+
+    await runForegroundRewriteCandidates({
+      config: {
+        baseUrl: 'https://api.example.com/v1',
+        model: 'test-model',
+        temperature: 0.4,
+        timeoutMs: 180000,
+        candidateCount: 1,
+        humanizeLevel: 'strong',
+      },
+      apiKey: 'sk-local',
+      source,
+      candidateCount: 1,
+      generateOneCandidate,
+    });
+
+    expect(generateOneCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      humanizeLevel: 'strong',
+    }));
+  });
+
   it('returns partial candidates and diagnostics when a later candidate fails', async () => {
     const generateOneCandidate = vi.fn()
       .mockResolvedValueOnce({
