@@ -153,6 +153,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { db } from '@synccaster/core';
+import { aiClient } from '../options/ai/client';
+import { getPostEditUrl } from '../options/ai/post-routing';
 
 const loading = ref(true);
 const recentPosts = ref<any[]>([]);
@@ -261,7 +263,23 @@ function openEditor() {
   });
 }
 
-function editPost(postId: string) {
+async function editPost(postId: string) {
+  const post = recentPosts.value.find((item) => item.id === postId) || await db.posts.get(postId);
+  if (!post) {
+    showToast('文章不存在', 'error');
+    return;
+  }
+
+  try {
+    const response = await aiClient.getConfig();
+    chrome.tabs.create({
+      url: getPostEditUrl(response.config, post, chrome.runtime.getURL),
+    });
+    return;
+  } catch (error) {
+    console.warn('Failed to load AI config, opening editor directly:', error);
+  }
+
   chrome.tabs.create({
     url: chrome.runtime.getURL(`src/ui/options/index.html#/editor/${postId}`),
   });

@@ -65,7 +65,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { db } from '@synccaster/core';
 import { useMessage } from 'naive-ui';
 import { aiClient } from '../ai/client';
-import { shouldOpenAiRewrite } from '../ai/post-routing';
+import { getPostEditHash } from '../ai/post-routing';
 
 defineProps<{ isDark?: boolean }>();
 const message = useMessage();
@@ -129,10 +129,8 @@ async function editPost(id: string) {
 
   try {
     const response = await aiClient.getConfig();
-    if (shouldOpenAiRewrite(response.config, post)) {
-      window.location.hash = `ai-rewrite/${id}`;
-      return;
-    }
+    window.location.hash = getPostEditHash(response.config, post);
+    return;
   } catch (error) {
     console.warn('Failed to load AI config, opening editor directly:', error);
   }
