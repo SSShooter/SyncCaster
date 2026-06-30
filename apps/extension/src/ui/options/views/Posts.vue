@@ -64,6 +64,8 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { db } from '@synccaster/core';
 import { useMessage } from 'naive-ui';
+import { aiClient } from '../ai/client';
+import { shouldOpenAiRewrite } from '../ai/post-routing';
 
 defineProps<{ isDark?: boolean }>();
 const message = useMessage();
@@ -118,7 +120,25 @@ function formatTime(ts: number) {
 }
 
 function createPost() { window.location.hash = 'editor/new'; }
-function editPost(id: string) { window.location.hash = `editor/${id}`; }
+async function editPost(id: string) {
+  const post = posts.value.find((item) => item.id === id) || await db.posts.get(id);
+  if (!post) {
+    message.error('文章不存在');
+    return;
+  }
+
+  try {
+    const response = await aiClient.getConfig();
+    if (shouldOpenAiRewrite(response.config, post)) {
+      window.location.hash = `ai-rewrite/${id}`;
+      return;
+    }
+  } catch (error) {
+    console.warn('Failed to load AI config, opening editor directly:', error);
+  }
+
+  window.location.hash = `editor/${id}`;
+}
 
 // 根据 source_url 判断文章来源平台
 function getSourcePlatform(post: any): string {

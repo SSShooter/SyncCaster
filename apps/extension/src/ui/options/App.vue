@@ -196,6 +196,8 @@ import PostsView from './views/Posts.vue';
 import AccountsView from './views/Accounts.vue';
 import TasksView from './views/Tasks.vue';
 import EditorView from './views/Editor.vue';
+import AiSettingsView from './views/AiSettings.vue';
+import AiRewriteView from './views/AiRewrite.vue';
 
 const isDark = ref(false);
 const theme = computed(() => isDark.value ? darkTheme : null);
@@ -240,6 +242,7 @@ const navItems = [
   { path: 'posts', label: '文章管理', icon: '📝' },
   { path: 'accounts', label: '账号管理', icon: '👤' },
   { path: 'tasks', label: '任务中心', icon: '⚙️' },
+  { path: 'ai-settings', label: 'AI 设置', icon: 'AI' },
 ];
 
 // 导出选项
@@ -267,6 +270,7 @@ const components: Record<string, any> = {
   posts: PostsView,
   accounts: AccountsView,
   tasks: TasksView,
+  'ai-settings': AiSettingsView,
   editor: EditorView,
 };
 
@@ -351,6 +355,11 @@ function updateRouteFromHash() {
   const hash = raw.startsWith('/') ? raw.slice(1) : raw;
   if (!hash) {
     navigate('dashboard');
+    return;
+  }
+  if (hash.startsWith('ai-rewrite/')) {
+    currentPath.value = 'ai-settings';
+    currentComponent.value = AiRewriteView;
     return;
   }
   // 支持 editor/<id>
