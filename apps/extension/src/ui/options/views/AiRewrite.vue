@@ -55,6 +55,14 @@
         <div v-if="generationStageText" class="text-xs mt-2" :class="isDark ? 'text-gray-300' : 'text-gray-600'">
           {{ generationStageText }}
         </div>
+        <div
+          v-if="streamingPreview"
+          class="stream-preview mt-3"
+          :class="isDark ? 'bg-gray-900/70 text-gray-200' : 'bg-gray-50 text-gray-700'"
+        >
+          <div class="text-xs mb-2" :class="isDark ? 'text-gray-400' : 'text-gray-500'">实时返回预览</div>
+          <pre>{{ streamingPreview }}</pre>
+        </div>
         <div v-if="jobStatusText" class="text-xs mt-3" :class="jobStatusClass">
           {{ jobStatusText }}
         </div>
@@ -154,6 +162,7 @@ const activeRequestId = ref('');
 const generatedCount = ref(0);
 const requestedCount = ref(0);
 const nowTick = ref(Date.now());
+const streamingPreview = ref('');
 let timer: ReturnType<typeof setInterval> | null = null;
 let generateController: AbortController | null = null;
 
@@ -194,6 +203,7 @@ const generationStageText = computed(() => {
     response_received: 'AI 接口已返回，正在解析和保存',
     candidate_saved: '候选已保存',
     candidate_error: '候选生成失败',
+    stream_chunk: 'AI 正在返回内容',
     finished: '本轮生成结束',
     saving_job: '正在保存生成状态',
     loading_config: '正在读取 AI 配置',
@@ -276,6 +286,7 @@ async function generate() {
   generationDiagnostics.value = null;
   generationEvent.value = null;
   generationElapsedMs.value = null;
+  streamingPreview.value = '';
   generatedCount.value = 0;
   requestedCount.value = 0;
   candidates.value = [];
@@ -416,6 +427,7 @@ async function generateOneMore() {
   generationDiagnostics.value = null;
   generationEvent.value = null;
   generationElapsedMs.value = null;
+  streamingPreview.value = '';
   generatedCount.value = candidates.value.length;
   requestedCount.value = candidates.value.length + 1;
   generateController?.abort();
@@ -536,6 +548,12 @@ function handleGenerationEvent(event: ForegroundRewriteEvent) {
   generationEvent.value = event;
   generatedCount.value = event.finishedCount;
   requestedCount.value = event.requestedCount;
+  if (event.stage === 'stream_chunk') {
+    streamingPreview.value = event.message || '';
+  }
+  if (event.stage === 'candidate_saved') {
+    streamingPreview.value = '';
+  }
   if (event.stage === 'finished' || event.stage === 'candidate_error') {
     generationElapsedMs.value = event.elapsedMs;
   }
@@ -659,6 +677,20 @@ onBeforeUnmount(() => {
   padding: 12px;
   border-radius: 6px;
   line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.stream-preview {
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.stream-preview pre {
+  margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
