@@ -149,4 +149,45 @@ describe('generateRewriteCandidates', () => {
 
     expect(JSON.stringify(body.messages)).toContain('Humanize level: strong');
   });
+
+  it('reports accumulated streaming text before parsing the final candidate', async () => {
+    const chunks: string[] = [];
+    const encoder = new TextEncoder();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"{\\"candidates\\":["}}]}\n\n'));
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"{\\"title\\":\\"Candidate\\",\\"bodyMd\\":\\"Body\\"}]}"}}]}\n\n'));
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      }),
+    });
+
+    const result = await generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: 'Original body',
+        },
+        candidateCount: 1,
+        onStreamChunk: (value) => chunks.push(value),
+      },
+      fetchImpl as any
+    );
+
+    expect(chunks).toEqual([
+      '{"candidates":[',
+      '{"candidates":[{"title":"Candidate","bodyMd":"Body"}]}',
+    ]);
+    expect(result.candidates[0]).toMatchObject({ title: 'Candidate', bodyMd: 'Body' });
+  });
 });

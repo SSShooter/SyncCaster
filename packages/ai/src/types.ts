@@ -1,5 +1,6 @@
 export type AiRewriteStyle = 'balanced' | 'less_ai' | 'platform_ready';
 export type AiHumanizeLevel = 'light' | 'standard' | 'strong';
+export type AiStreamChunkHandler = (content: string) => void;
 
 export interface AiRewritePromptTemplate {
   id: string;
@@ -33,6 +34,7 @@ export interface AiRewritePromptInput {
 export interface AiRewriteRequest extends AiRewritePromptInput {
   provider: AiProviderConfig;
   signal?: AbortSignal;
+  onStreamChunk?: AiStreamChunkHandler;
 }
 
 export interface AiRewriteCandidate {

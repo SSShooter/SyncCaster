@@ -1,4 +1,4 @@
-import { createChatCompletion, type AiFetch } from './openai-compatible';
+import { createChatCompletion, createStreamingChatCompletion, type AiFetch } from './openai-compatible';
 import { preCleanAiCliches } from './humanize-rules';
 import { buildRewriteMessages } from './prompts';
 import { AiProviderError, type AiRewriteCandidate, type AiRewriteRequest, type AiRewriteResult } from './types';
@@ -19,6 +19,14 @@ function safelyPreCleanAiCliches(markdown: string): string {
   } catch {
     return markdown;
   }
+}
+
+function shouldFallbackFromStreaming(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) {
+    return false;
+  }
+  const code = (error as { code?: string } | null)?.code;
+  return code === 'invalid_response' || code === 'provider_error' || code === 'network_error';
 }
 
 export function parseRewriteCandidates(content: string): AiRewriteCandidate[] {
@@ -58,18 +66,32 @@ export async function generateRewriteCandidates(
     ...request.source,
     bodyMd: safelyPreCleanAiCliches(request.source.bodyMd),
   };
-  const raw = await createChatCompletion(
-    request.provider,
-    buildRewriteMessages({
+  const messages = buildRewriteMessages({
       source,
       style: request.style,
       rewritePrompt: request.rewritePrompt,
       humanizeLevel: request.humanizeLevel,
       candidateCount: request.candidateCount,
-    }),
-    fetchImpl,
-    request.signal
-  );
+    });
+  let raw: string;
+  if (request.onStreamChunk) {
+    try {
+      raw = await createStreamingChatCompletion(
+        request.provider,
+        messages,
+        request.onStreamChunk,
+        fetchImpl,
+        request.signal
+      );
+    } catch (error) {
+      if (!shouldFallbackFromStreaming(error, request.signal)) {
+        throw error;
+      }
+      raw = await createChatCompletion(request.provider, messages, fetchImpl, request.signal);
+    }
+  } else {
+    raw = await createChatCompletion(request.provider, messages, fetchImpl, request.signal);
+  }
 
   return {
     raw,
