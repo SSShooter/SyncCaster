@@ -67,6 +67,7 @@ describe('ai-service settings storage', () => {
 
   it('returns defaults when no config is stored', async () => {
     const loaded = await loadAiRewriteSettings(createDeps());
+    expect(DEFAULT_AI_REWRITE_CONFIG.humanizeLevel).toBe('standard');
     expect(loaded.config).toMatchObject({ ...DEFAULT_AI_REWRITE_CONFIG, hasApiKey: false });
     expect(loaded.config.rewritePrompts[0]).toMatchObject({ id: 'general', name: '通用改写' });
   });
@@ -116,6 +117,41 @@ describe('ai-service settings storage', () => {
     const loaded = await loadAiRewriteSettings(deps);
 
     expect(loaded.config.candidateCount).toBe(1);
+  });
+
+  it('persists the selected humanize level', async () => {
+    const deps = createDeps();
+
+    await saveAiRewriteSettings(
+      {
+        enabled: true,
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        temperature: 0.4,
+        candidateCount: 1,
+        humanizeLevel: 'strong',
+      },
+      deps
+    );
+
+    const loaded = await loadAiRewriteSettings(deps);
+
+    expect(loaded.config.humanizeLevel).toBe('strong');
+  });
+
+  it('normalizes unknown humanize levels to standard', async () => {
+    const deps = createDeps();
+
+    await saveAiRewriteSettings(
+      {
+        humanizeLevel: 'surprise',
+      },
+      deps
+    );
+
+    const loaded = await loadAiRewriteSettings(deps);
+
+    expect(loaded.config.humanizeLevel).toBe('standard');
   });
 
   it('persists and clamps the AI request timeout', async () => {

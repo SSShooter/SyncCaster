@@ -1,7 +1,9 @@
 import {
   DEFAULT_REWRITE_PROMPT,
   generateRewriteCandidates,
+  normalizeHumanizeLevel,
   testOpenAiConnection,
+  type AiHumanizeLevel,
   type AiRewritePromptTemplate,
   type AiRewriteStyle,
 } from '@synccaster/ai';
@@ -17,6 +19,7 @@ export const DEFAULT_AI_REWRITE_CONFIG = {
   temperature: 0.4,
   timeoutMs: 180_000,
   candidateCount: 2 as 1 | 2 | 3,
+  humanizeLevel: 'standard' as AiHumanizeLevel,
   defaultStyle: 'balanced' as AiRewriteStyle,
   rewritePrompts: [DEFAULT_REWRITE_PROMPT] as AiRewritePromptTemplate[],
   defaultRewritePromptId: DEFAULT_REWRITE_PROMPT.id,
@@ -70,6 +73,7 @@ function normalizeConfig(input: any) {
     candidateCount: [1, 2, 3].includes(Number(input?.candidateCount))
       ? Number(input.candidateCount) as 1 | 2 | 3
       : DEFAULT_AI_REWRITE_CONFIG.candidateCount,
+    humanizeLevel: normalizeHumanizeLevel(input?.humanizeLevel),
     defaultStyle: ['balanced', 'less_ai', 'platform_ready'].includes(input?.defaultStyle)
       ? input.defaultStyle as AiRewriteStyle
       : DEFAULT_AI_REWRITE_CONFIG.defaultStyle,
@@ -174,6 +178,7 @@ export async function handleAiMessage(message: any, deps: AiServiceDeps = create
           source: message.data.source,
           rewritePrompt,
           style: message.data.style || settings.config.defaultStyle,
+          humanizeLevel: settings.config.humanizeLevel,
           candidateCount: settings.config.candidateCount,
         });
         return { success: true, result };
