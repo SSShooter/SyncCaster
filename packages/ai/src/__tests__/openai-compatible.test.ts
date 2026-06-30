@@ -2,9 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildChatCompletionsUrl,
   createChatCompletion,
+  createStreamingChatCompletion,
   mapOpenAiError,
   testOpenAiConnection,
 } from '../openai-compatible';
+
+function streamFromText(text: string) {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(text));
+      controller.close();
+    },
+  });
+}
 
 describe('buildChatCompletionsUrl', () => {
   it('accepts base URLs with and without /v1', () => {
@@ -84,5 +95,38 @@ describe('createChatCompletion timeout', () => {
         signal: expect.any(AbortSignal),
       })
     );
+  });
+});
+
+describe('createStreamingChatCompletion', () => {
+  it('streams chat completion content from SSE chunks', async () => {
+    const chunks: string[] = [];
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      body: streamFromText([
+        'data: {"choices":[{"delta":{"content":"{\\"candidates\\":["}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"{\\"title\\":\\"T\\",\\"bodyMd\\":\\"B\\"}]}"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ].join('')),
+    });
+
+    const result = await createStreamingChatCompletion(
+      {
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-local',
+        model: 'gpt-4o-mini',
+        temperature: 0.2,
+      },
+      [{ role: 'user', content: 'Return JSON.' }],
+      (value) => chunks.push(value),
+      fetchImpl as any
+    );
+
+    expect(result).toBe('{"candidates":[{"title":"T","bodyMd":"B"}]}');
+    expect(chunks).toEqual([
+      '{"candidates":[',
+      '{"candidates":[{"title":"T","bodyMd":"B"}]}',
+    ]);
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toMatchObject({ stream: true });
   });
 });
