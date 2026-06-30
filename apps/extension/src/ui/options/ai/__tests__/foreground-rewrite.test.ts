@@ -145,6 +145,32 @@ describe('runForegroundRewriteCandidates', () => {
     }));
   });
 
+  it('emits a visible event when streaming falls back to normal mode', async () => {
+    const onEvent = vi.fn();
+    const generateOneCandidate = vi.fn(async (input) => {
+      input.onStreamFallback?.('AI provider did not support streaming. Falling back to normal mode.');
+      return {
+        raw: '{"candidates":[{"title":"One","bodyMd":"Body one","style":"general"}]}',
+        candidates: [{ id: 'candidate-1', title: 'One', bodyMd: 'Body one', style: 'general' }],
+      };
+    });
+
+    await runForegroundRewriteCandidates({
+      config,
+      apiKey: 'sk-local',
+      source,
+      rewritePromptId: 'general',
+      candidateCount: 1,
+      generateOneCandidate,
+      onEvent,
+    });
+
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'stream_fallback',
+      message: 'AI provider did not support streaming. Falling back to normal mode.',
+    }));
+  });
+
   it('returns partial candidates and diagnostics when a later candidate fails', async () => {
     const generateOneCandidate = vi.fn()
       .mockResolvedValueOnce({

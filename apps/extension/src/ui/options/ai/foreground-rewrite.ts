@@ -51,6 +51,7 @@ export type ForegroundRewriteEventStage =
   | 'candidate_saved'
   | 'candidate_error'
   | 'stream_chunk'
+  | 'stream_fallback'
   | 'finished';
 
 export interface ForegroundRewriteEvent {
@@ -72,6 +73,7 @@ export interface GenerateOneCandidateInput {
   candidateIndex: number;
   signal?: AbortSignal;
   onStreamChunk?: (content: string) => void;
+  onStreamFallback?: (message: string) => void;
 }
 
 export type GenerateOneCandidate = (input: GenerateOneCandidateInput) => Promise<{
@@ -128,6 +130,7 @@ async function defaultGenerateOneCandidate(input: GenerateOneCandidateInput) {
     candidateCount: 1,
     signal: input.signal,
     onStreamChunk: input.onStreamChunk,
+    onStreamFallback: input.onStreamFallback,
   });
 }
 
@@ -185,6 +188,7 @@ export async function runForegroundRewriteCandidates(input: RunForegroundRewrite
         onStreamChunk: input.preferStreaming === false
           ? undefined
           : (content) => emit('stream_chunk', { candidateIndex: index, message: content }),
+        onStreamFallback: (message) => emit('stream_fallback', { candidateIndex: index, message }),
       });
       emit('response_received', { candidateIndex: index });
       const candidate = result.candidates[0];

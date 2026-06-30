@@ -190,4 +190,49 @@ describe('generateRewriteCandidates', () => {
     ]);
     expect(result.candidates[0]).toMatchObject({ title: 'Candidate', bodyMd: 'Body' });
   });
+
+  it('reports when streaming falls back to a normal provider request', async () => {
+    const onStreamFallback = vi.fn();
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        body: null,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: '{"candidates":[{"title":"Fallback","bodyMd":"Body","style":"balanced"}]}',
+              },
+            },
+          ],
+        }),
+      });
+
+    const result = await generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: 'Original body',
+        },
+        candidateCount: 1,
+        onStreamChunk: vi.fn(),
+        onStreamFallback,
+      },
+      fetchImpl as any
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(onStreamFallback).toHaveBeenCalledWith('AI provider did not support streaming. Falling back to normal mode.');
+    expect(result.candidates[0]).toMatchObject({ title: 'Fallback', bodyMd: 'Body' });
+  });
 });

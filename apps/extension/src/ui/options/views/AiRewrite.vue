@@ -204,6 +204,7 @@ const generationStageText = computed(() => {
     candidate_saved: '候选已保存',
     candidate_error: '候选生成失败',
     stream_chunk: 'AI 正在返回内容',
+    stream_fallback: '流式返回不可用，已切换普通模式',
     finished: '本轮生成结束',
     saving_job: '正在保存生成状态',
     loading_config: '正在读取 AI 配置',

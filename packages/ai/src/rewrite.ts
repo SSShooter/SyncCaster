@@ -3,6 +3,8 @@ import { preCleanAiCliches } from './humanize-rules';
 import { buildRewriteMessages } from './prompts';
 import { AiProviderError, type AiRewriteCandidate, type AiRewriteRequest, type AiRewriteResult } from './types';
 
+const STREAMING_FALLBACK_MESSAGE = 'AI provider did not support streaming. Falling back to normal mode.';
+
 function stripJsonFence(content: string): string {
   const trimmed = content.trim();
   const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
@@ -87,6 +89,7 @@ export async function generateRewriteCandidates(
       if (!shouldFallbackFromStreaming(error, request.signal)) {
         throw error;
       }
+      request.onStreamFallback?.(STREAMING_FALLBACK_MESSAGE);
       raw = await createChatCompletion(request.provider, messages, fetchImpl, request.signal);
     }
   } else {
