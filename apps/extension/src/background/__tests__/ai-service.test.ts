@@ -47,21 +47,99 @@ describe('ai-service settings storage', () => {
         model: 'gpt-4o-mini',
         temperature: 0.4,
         candidateCount: 2,
-        defaultStyle: 'balanced',
+        rewritePrompts: [
+          { id: 'general', name: '通用改写', prompt: '保持原意，重组表达。' },
+          { id: 'wechat', name: '公众号', prompt: '改成公众号文章风格。' },
+        ],
+        defaultRewritePromptId: 'wechat',
       },
       deps
     );
 
     expect(deps.configTable.rows.get(AI_CONFIG_ID).value.apiKey).toBeUndefined();
+    expect(deps.configTable.rows.get(AI_CONFIG_ID).value.rewritePrompts).toHaveLength(2);
+    expect(deps.configTable.rows.get(AI_CONFIG_ID).value.defaultRewritePromptId).toBe('wechat');
     expect(deps.secretsTable.rows.get(AI_SECRET_ID).encrypted).toBe('sk-local');
 
     const loaded = await loadAiRewriteSettings(deps);
-    expect(loaded.config).toMatchObject({ enabled: true, hasApiKey: true });
+    expect(loaded.config).toMatchObject({ enabled: true, hasApiKey: true, defaultRewritePromptId: 'wechat' });
   });
 
   it('returns defaults when no config is stored', async () => {
     const loaded = await loadAiRewriteSettings(createDeps());
     expect(loaded.config).toMatchObject({ ...DEFAULT_AI_REWRITE_CONFIG, hasApiKey: false });
+    expect(loaded.config.rewritePrompts[0]).toMatchObject({ id: 'general', name: '通用改写' });
+  });
+
+  it('persists edited prompt template names', async () => {
+    const deps = createDeps();
+
+    await saveAiRewriteSettings(
+      {
+        enabled: true,
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        temperature: 0.4,
+        candidateCount: 2,
+        rewritePrompts: [
+          { id: 'prompt-custom', name: '小红书风格', prompt: '改成更适合小红书的表达。' },
+        ],
+        defaultRewritePromptId: 'prompt-custom',
+      },
+      deps
+    );
+
+    const loaded = await loadAiRewriteSettings(deps);
+
+    expect(loaded.config.rewritePrompts[0]).toMatchObject({
+      id: 'prompt-custom',
+      name: '小红书风格',
+      prompt: '改成更适合小红书的表达。',
+    });
+    expect(loaded.config.defaultRewritePromptId).toBe('prompt-custom');
+  });
+
+  it('persists one rewrite candidate when configured', async () => {
+    const deps = createDeps();
+
+    await saveAiRewriteSettings(
+      {
+        enabled: true,
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        temperature: 0.4,
+        candidateCount: 1,
+      },
+      deps
+    );
+
+    const loaded = await loadAiRewriteSettings(deps);
+
+    expect(loaded.config.candidateCount).toBe(1);
+  });
+
+  it('persists and clamps the AI request timeout', async () => {
+    const deps = createDeps();
+
+    await saveAiRewriteSettings(
+      {
+        enabled: true,
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        temperature: 0.4,
+        candidateCount: 1,
+        timeoutMs: 240_000,
+      },
+      deps
+    );
+
+    expect((await loadAiRewriteSettings(deps)).config.timeoutMs).toBe(240_000);
+
+    await saveAiRewriteSettings({ timeoutMs: 10_000 }, deps);
+    expect((await loadAiRewriteSettings(deps)).config.timeoutMs).toBe(30_000);
+
+    await saveAiRewriteSettings({ timeoutMs: 900_000 }, deps);
+    expect((await loadAiRewriteSettings(deps)).config.timeoutMs).toBe(600_000);
   });
 });
 
@@ -85,8 +163,12 @@ describe('ai-service messages', () => {
         apiKey: 'sk-local',
         model: 'gpt-4o-mini',
         temperature: 0.4,
-        candidateCount: 2,
-        defaultStyle: 'less_ai',
+        candidateCount: 1,
+        rewritePrompts: [
+          { id: 'general', name: '通用改写', prompt: '保持原意，重组表达。' },
+          { id: 'wechat', name: '公众号', prompt: '改成公众号文章风格。' },
+        ],
+        defaultRewritePromptId: 'general',
       },
       deps
     );
@@ -96,7 +178,7 @@ describe('ai-service messages', () => {
         type: 'AI_GENERATE_CANDIDATES',
         data: {
           source: { postId: 'post-1', title: 'T', bodyMd: 'B' },
-          style: 'platform_ready',
+          rewritePromptId: 'wechat',
         },
       },
       deps
@@ -106,8 +188,8 @@ describe('ai-service messages', () => {
     expect(deps.generateRewriteCandidates).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: expect.objectContaining({ apiKey: 'sk-local' }),
-        style: 'platform_ready',
-        candidateCount: 2,
+        rewritePrompt: { id: 'wechat', name: '公众号', prompt: '改成公众号文章风格。' },
+        candidateCount: 1,
       })
     );
   });

@@ -1,4 +1,5 @@
 import { createChatCompletion, type AiFetch } from './openai-compatible';
+import { preCleanAiCliches } from './humanize-rules';
 import { buildRewriteMessages } from './prompts';
 import { AiProviderError, type AiRewriteCandidate, type AiRewriteRequest, type AiRewriteResult } from './types';
 
@@ -45,14 +46,20 @@ export async function generateRewriteCandidates(
   request: AiRewriteRequest,
   fetchImpl: AiFetch = fetch
 ): Promise<AiRewriteResult> {
+  const source = {
+    ...request.source,
+    bodyMd: preCleanAiCliches(request.source.bodyMd),
+  };
   const raw = await createChatCompletion(
     request.provider,
     buildRewriteMessages({
-      source: request.source,
+      source,
       style: request.style,
+      rewritePrompt: request.rewritePrompt,
       candidateCount: request.candidateCount,
     }),
-    fetchImpl
+    fetchImpl,
+    request.signal
   );
 
   return {

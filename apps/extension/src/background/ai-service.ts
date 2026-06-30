@@ -1,6 +1,8 @@
 import {
+  DEFAULT_REWRITE_PROMPT,
   generateRewriteCandidates,
   testOpenAiConnection,
+  type AiRewritePromptTemplate,
   type AiRewriteStyle,
 } from '@synccaster/ai';
 import { db, type AppConfig, type Secret } from '@synccaster/core';
@@ -13,8 +15,11 @@ export const DEFAULT_AI_REWRITE_CONFIG = {
   baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
   temperature: 0.4,
-  candidateCount: 2 as 2 | 3,
+  timeoutMs: 180_000,
+  candidateCount: 2 as 1 | 2 | 3,
   defaultStyle: 'balanced' as AiRewriteStyle,
+  rewritePrompts: [DEFAULT_REWRITE_PROMPT] as AiRewritePromptTemplate[],
+  defaultRewritePromptId: DEFAULT_REWRITE_PROMPT.id,
 };
 
 type ConfigTable = Pick<typeof db.config, 'get' | 'put'>;
@@ -49,16 +54,47 @@ export function isAiMessageType(type: string): boolean {
 }
 
 function normalizeConfig(input: any) {
+  const rewritePrompts = normalizeRewritePrompts(input?.rewritePrompts);
+  const defaultRewritePromptId = rewritePrompts.some((item) => item.id === input?.defaultRewritePromptId)
+    ? input.defaultRewritePromptId
+    : rewritePrompts[0].id;
+  const timeoutMs = Number(input?.timeoutMs);
   return {
     enabled: Boolean(input?.enabled),
     baseUrl: String(input?.baseUrl || DEFAULT_AI_REWRITE_CONFIG.baseUrl).trim(),
     model: String(input?.model || DEFAULT_AI_REWRITE_CONFIG.model).trim(),
     temperature: Number.isFinite(Number(input?.temperature)) ? Number(input.temperature) : DEFAULT_AI_REWRITE_CONFIG.temperature,
-    candidateCount: Number(input?.candidateCount) === 3 ? 3 as const : 2 as const,
+    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.min(Math.max(timeoutMs, 30_000), 600_000)
+      : DEFAULT_AI_REWRITE_CONFIG.timeoutMs,
+    candidateCount: [1, 2, 3].includes(Number(input?.candidateCount))
+      ? Number(input.candidateCount) as 1 | 2 | 3
+      : DEFAULT_AI_REWRITE_CONFIG.candidateCount,
     defaultStyle: ['balanced', 'less_ai', 'platform_ready'].includes(input?.defaultStyle)
       ? input.defaultStyle as AiRewriteStyle
       : DEFAULT_AI_REWRITE_CONFIG.defaultStyle,
+    rewritePrompts,
+    defaultRewritePromptId,
   };
+}
+
+function normalizeRewritePrompts(input: any): AiRewritePromptTemplate[] {
+  const prompts = Array.isArray(input)
+    ? input
+        .map((item) => ({
+          id: String(item?.id || '').trim(),
+          name: String(item?.name || '').trim(),
+          prompt: String(item?.prompt || '').trim(),
+        }))
+        .filter((item) => item.id && item.name && item.prompt)
+    : [];
+  return prompts.length > 0 ? prompts : [DEFAULT_REWRITE_PROMPT];
+}
+
+function resolveRewritePrompt(config: any, rewritePromptId?: string): AiRewritePromptTemplate {
+  const prompts = normalizeRewritePrompts(config.rewritePrompts);
+  const selectedId = rewritePromptId || config.defaultRewritePromptId;
+  return prompts.find((item) => item.id === selectedId) || prompts[0];
 }
 
 export async function loadAiRewriteSettings(deps: AiServiceDeps = createDefaultDeps()) {
@@ -110,6 +146,7 @@ async function requireProviderConfig(deps: AiServiceDeps) {
       apiKey: secret.encrypted,
       model: settings.config.model,
       temperature: settings.config.temperature,
+      timeoutMs: settings.config.timeoutMs || DEFAULT_AI_REWRITE_CONFIG.timeoutMs,
     },
   };
 }
@@ -131,9 +168,11 @@ export async function handleAiMessage(message: any, deps: AiServiceDeps = create
       }
       case 'AI_GENERATE_CANDIDATES': {
         const { settings, provider } = await requireProviderConfig(deps);
+        const rewritePrompt = resolveRewritePrompt(settings.config, message.data.rewritePromptId);
         const result = await deps.generateRewriteCandidates({
           provider,
           source: message.data.source,
+          rewritePrompt,
           style: message.data.style || settings.config.defaultStyle,
           candidateCount: settings.config.candidateCount,
         });

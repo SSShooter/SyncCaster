@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildChatCompletionsUrl,
+  createChatCompletion,
   mapOpenAiError,
   testOpenAiConnection,
 } from '../openai-compatible';
@@ -47,6 +48,40 @@ describe('testOpenAiConnection', () => {
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ Authorization: 'Bearer sk-local' }),
+      })
+    );
+  });
+});
+
+describe('createChatCompletion timeout', () => {
+  it('aborts slow provider requests with a clear timeout error', async () => {
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    });
+
+    await expect(createChatCompletion(
+      {
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-local',
+        model: 'gpt-4o-mini',
+        temperature: 0.2,
+        timeoutMs: 5,
+      },
+      [{ role: 'user', content: 'Return JSON.' }],
+      fetchImpl as any
+    )).rejects.toMatchObject({
+      code: 'timeout',
+      message: 'AI provider request timed out.',
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/chat/completions',
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
       })
     );
   });

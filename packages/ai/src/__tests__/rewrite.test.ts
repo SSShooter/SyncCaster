@@ -58,7 +58,11 @@ describe('generateRewriteCandidates', () => {
           bodyMd: 'Original body',
           sourceUrl: 'https://example.com/post',
         },
-        style: 'balanced',
+        rewritePrompt: {
+          id: 'general',
+          name: '通用改写',
+          prompt: '保持原意，重组表达。',
+        },
         candidateCount: 2,
       },
       fetchImpl
@@ -66,5 +70,43 @@ describe('generateRewriteCandidates', () => {
 
     expect(result.candidates).toHaveLength(1);
     expect(result.raw).toContain('Candidate');
+  });
+
+  it('passes abort signals to the provider request', async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      requestSignal = init?.signal;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    });
+
+    const request = generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: 'Original body',
+        },
+        candidateCount: 1,
+        signal: controller.signal,
+      },
+      fetchImpl as any
+    );
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(requestSignal?.aborted).toBe(false);
+    controller.abort();
+    await expect(request).rejects.toMatchObject({ code: 'canceled' });
+    expect(requestSignal?.aborted).toBe(true);
   });
 });

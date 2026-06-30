@@ -31,15 +31,67 @@
           <n-input-number v-model:value="form.temperature" :min="0" :max="2" :step="0.1" />
         </n-form-item>
 
+        <n-form-item label="请求超时">
+          <n-input-number v-model:value="timeoutSeconds" :min="30" :max="600" :step="30">
+            <template #suffix>秒</template>
+          </n-input-number>
+        </n-form-item>
+
         <n-form-item label="生成数量">
           <n-radio-group v-model:value="form.candidateCount">
+            <n-radio-button :value="1">1 个</n-radio-button>
             <n-radio-button :value="2">2 个</n-radio-button>
             <n-radio-button :value="3">3 个</n-radio-button>
           </n-radio-group>
         </n-form-item>
 
-        <n-form-item label="默认风格">
-          <n-select v-model:value="form.defaultStyle" :options="styleOptions" />
+        <n-form-item label="默认提示词">
+          <n-select
+            :key="rewritePromptOptionsKey"
+            v-model:value="form.defaultRewritePromptId"
+            :options="rewritePromptOptions"
+          />
+        </n-form-item>
+
+        <n-form-item label="改写提示词模板">
+          <div class="prompt-manager">
+            <div class="prompt-toolbar">
+              <n-select
+                :key="rewritePromptOptionsKey"
+                v-model:value="selectedPromptId"
+                :options="rewritePromptOptions"
+                class="prompt-select"
+              />
+              <n-button size="small" @click="addPrompt">新增</n-button>
+              <n-button size="small" :disabled="form.rewritePrompts.length <= 1" @click="removePrompt">删除</n-button>
+            </div>
+
+            <div v-if="selectedPrompt" class="prompt-editor">
+              <n-input :value="selectedPrompt.name" placeholder="模板名称" @update:value="updateSelectedPromptName" />
+              <n-input
+                :value="selectedPrompt.prompt"
+                type="textarea"
+                placeholder="输入改写方向，例如：改成更适合公众号发布的口吻，保留事实和结构。"
+                :autosize="{ minRows: 5, maxRows: 10 }"
+                @update:value="updateSelectedPromptContent"
+              />
+              <div class="prompt-actions">
+                <n-button
+                  size="small"
+                  :disabled="form.defaultRewritePromptId === selectedPrompt.id"
+                  @click="form.defaultRewritePromptId = selectedPrompt.id"
+                >
+                  设为默认
+                </n-button>
+                <n-button size="small" type="primary" :loading="saving" @click="saveConfig">
+                  保存设置
+                </n-button>
+                <span class="text-xs" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+                  去 AI 味要求会固定叠加，无需写进每个模板。
+                </span>
+              </div>
+            </div>
+          </div>
         </n-form-item>
 
         <div class="text-sm mb-4" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
@@ -58,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useMessage } from 'naive-ui';
 import { aiClient } from '../ai/client';
 import { requestAiHostPermission } from '../ai/host-permissions';
@@ -76,20 +128,48 @@ const form = reactive({
   apiKey: '',
   model: 'gpt-4o-mini',
   temperature: 0.4,
+  timeoutMs: 180000,
   candidateCount: 2,
-  defaultStyle: 'balanced',
+  rewritePrompts: [
+    {
+      id: 'general',
+      name: '通用改写',
+      prompt: [
+        '在保留事实、观点和信息完整性的前提下，对文章进行重新编排和表达。',
+        '优化标题、段落顺序、衔接和可读性，让文章更适合直接发布。',
+        '不要扩写无依据的信息，不要改变原文结论。',
+      ].join('\n'),
+    },
+  ],
+  defaultRewritePromptId: 'general',
 });
 
-const styleOptions = [
-  { label: '平衡改写', value: 'balanced' },
-  { label: '降低 AI 味', value: 'less_ai' },
-  { label: '平台发布优化', value: 'platform_ready' },
-];
+const selectedPromptId = ref('general');
+const rewritePromptOptions = computed(() => form.rewritePrompts.map((item) => ({
+  label: item.name || '未命名模板',
+  value: item.id,
+})));
+const timeoutSeconds = computed({
+  get: () => Math.round(Number(form.timeoutMs || 180000) / 1000),
+  set: (value: number | null) => {
+    form.timeoutMs = Math.min(Math.max(Number(value || 180), 30), 600) * 1000;
+  },
+});
+const rewritePromptOptionsKey = computed(() => form.rewritePrompts.map((item) => `${item.id}:${item.name}`).join('|'));
+const selectedPrompt = computed(() => form.rewritePrompts.find((item) => item.id === selectedPromptId.value));
 
 async function loadConfig() {
   try {
     const response = await aiClient.getConfig();
     Object.assign(form, response.config);
+    if (!Array.isArray(form.rewritePrompts) || form.rewritePrompts.length === 0) {
+      form.rewritePrompts = [{
+        id: 'general',
+        name: '通用改写',
+        prompt: '在保留事实和观点的前提下，对文章进行重新编排和表达。',
+      }];
+    }
+    selectedPromptId.value = form.defaultRewritePromptId || form.rewritePrompts[0].id;
     hasApiKey.value = Boolean(response.config.hasApiKey);
     form.apiKey = '';
   } catch (error: any) {
@@ -100,6 +180,9 @@ async function loadConfig() {
 async function saveConfig() {
   saving.value = true;
   try {
+    if (!validatePrompts()) {
+      return;
+    }
     const granted = await requestAiHostPermission(form.baseUrl);
     if (!granted) {
       message.error('未授权 AI 服务域名，无法保存该地址');
@@ -114,6 +197,59 @@ async function saveConfig() {
   } finally {
     saving.value = false;
   }
+}
+
+function addPrompt() {
+  const id = `prompt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  form.rewritePrompts.push({
+    id,
+    name: '新的改写模板',
+    prompt: '在保留原文事实和观点的基础上，调整表达方式、段落组织和发布口吻。',
+  });
+  selectedPromptId.value = id;
+}
+
+function removePrompt() {
+  if (form.rewritePrompts.length <= 1) {
+    return;
+  }
+  const index = form.rewritePrompts.findIndex((item) => item.id === selectedPromptId.value);
+  if (index < 0) {
+    return;
+  }
+  const removedId = form.rewritePrompts[index].id;
+  form.rewritePrompts.splice(index, 1);
+  const next = form.rewritePrompts[Math.max(0, index - 1)];
+  selectedPromptId.value = next.id;
+  if (form.defaultRewritePromptId === removedId || !form.rewritePrompts.some((item) => item.id === form.defaultRewritePromptId)) {
+    form.defaultRewritePromptId = next.id;
+  }
+}
+
+function updateSelectedPromptName(value: string) {
+  const prompt = selectedPrompt.value;
+  if (prompt) {
+    prompt.name = value;
+  }
+}
+
+function updateSelectedPromptContent(value: string) {
+  const prompt = selectedPrompt.value;
+  if (prompt) {
+    prompt.prompt = value;
+  }
+}
+
+function validatePrompts() {
+  const valid = form.rewritePrompts.every((item) => item.name.trim() && item.prompt.trim());
+  if (!valid) {
+    message.error('提示词模板名称和内容不能为空');
+    return false;
+  }
+  if (!form.rewritePrompts.some((item) => item.id === form.defaultRewritePromptId)) {
+    form.defaultRewritePromptId = form.rewritePrompts[0].id;
+  }
+  return true;
 }
 
 async function testConnection() {
@@ -143,3 +279,34 @@ async function clearApiKey() {
 
 onMounted(loadConfig);
 </script>
+
+<style scoped>
+.prompt-manager {
+  width: 100%;
+}
+
+.prompt-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.prompt-select {
+  min-width: 220px;
+  flex: 1;
+}
+
+.prompt-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+</style>

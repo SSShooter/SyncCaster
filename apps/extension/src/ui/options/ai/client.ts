@@ -1,5 +1,26 @@
-export async function sendAiMessage<T = any>(type: string, data?: unknown): Promise<T> {
-  const response = await chrome.runtime.sendMessage({ type, data });
+export const AI_MESSAGE_TIMEOUT_MS = 130_000;
+
+export async function sendAiMessage<T = any>(
+  type: string,
+  data?: unknown,
+  options: { timeoutMs?: number } = {}
+): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? AI_MESSAGE_TIMEOUT_MS;
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error('AI request timed out waiting for the extension background response.'));
+    }, timeoutMs);
+  });
+
+  const response = await Promise.race([
+    chrome.runtime.sendMessage({ type, data }),
+    timeoutPromise,
+  ]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
   if (!response?.success) {
     throw new Error(response?.error || 'AI request failed');
   }

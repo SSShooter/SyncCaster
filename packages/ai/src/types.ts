@@ -1,10 +1,17 @@
 export type AiRewriteStyle = 'balanced' | 'less_ai' | 'platform_ready';
 
+export interface AiRewritePromptTemplate {
+  id: string;
+  name: string;
+  prompt: string;
+}
+
 export interface AiProviderConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
   temperature: number;
+  timeoutMs?: number;
 }
 
 export interface AiRewriteSource {
@@ -16,12 +23,14 @@ export interface AiRewriteSource {
 
 export interface AiRewritePromptInput {
   source: AiRewriteSource;
-  style: AiRewriteStyle;
-  candidateCount: 2 | 3;
+  style?: AiRewriteStyle;
+  rewritePrompt?: AiRewritePromptTemplate;
+  candidateCount: 1 | 2 | 3;
 }
 
 export interface AiRewriteRequest extends AiRewritePromptInput {
   provider: AiProviderConfig;
+  signal?: AbortSignal;
 }
 
 export interface AiRewriteCandidate {
@@ -43,6 +52,8 @@ export type AiErrorCode =
   | 'auth_error'
   | 'rate_limited'
   | 'network_error'
+  | 'timeout'
+  | 'canceled'
   | 'invalid_response'
   | 'provider_error';
 
