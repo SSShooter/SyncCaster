@@ -59,9 +59,12 @@
                 </div>
                 <n-tag size="small">{{ countWords(candidate.bodyMd) }} 字</n-tag>
               </div>
-              <p class="text-sm mt-2 line-clamp-3" :class="isDark ? 'text-gray-300' : 'text-gray-600'">
+              <pre
+                class="candidate-body mt-3 text-sm"
+                :class="isDark ? 'bg-gray-900/70 text-gray-200' : 'bg-gray-50 text-gray-700'"
+              >
                 {{ candidate.bodyMd }}
-              </p>
+              </pre>
               <div v-if="candidate.rationale" class="text-xs mt-3" :class="isDark ? 'text-blue-300' : 'text-blue-600'">
                 {{ candidate.rationale }}
               </div>
@@ -212,11 +215,14 @@ onMounted(loadPost);
   outline: 2px solid #3b82f6;
 }
 
-.line-clamp-3 {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+.candidate-body {
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  padding: 12px;
+  border-radius: 6px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
   user-select: text;
 }
 </style>
