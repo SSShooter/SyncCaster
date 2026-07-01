@@ -204,4 +204,17 @@ describe('rewrite job persistence', () => {
     expect(getRewriteJobStatusText(error, Date.parse('2026-06-30T00:03:00.000Z'), true))
       .toBe('本次 AI 生成失败：AI provider request timed out.');
   });
+
+  it('shows a friendly message for quality validation failures', () => {
+    const error = buildRewriteJobError({
+      requestId: 'request-1',
+      style: 'less_ai',
+      startedAt: '2026-06-30T00:00:00.000Z',
+      finishedAt: '2026-06-30T00:04:00.000Z',
+      errorMessage: 'AI candidate was too short: candidate 1.',
+    });
+
+    expect(getRewriteJobStatusText(error, Date.parse('2026-06-30T00:04:05.000Z'), true))
+      .toBe('本次 AI 生成失败：AI 返回的文案太短，已自动重试后仍不合格。可以换个模板或降低压缩倾向后再试。');
+  });
 });

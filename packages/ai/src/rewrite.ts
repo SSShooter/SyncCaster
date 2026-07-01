@@ -2,7 +2,7 @@ import { createChatCompletion, createStreamingChatCompletion, type AiFetch } fro
 import { preCleanAiCliches } from './humanize-rules';
 import { buildRewriteMessages } from './prompts';
 import { mergeSegmentCandidates, splitMarkdownIntoSegments, shouldSegmentMarkdown } from './segmentation';
-import { AiProviderError, type AiRewriteCandidate, type AiRewriteRequest, type AiRewriteResult } from './types';
+import { AiProviderError, type AiRewriteCandidate, type AiRewriteRequest, type AiRewriteResult, type ChatMessage } from './types';
 
 const STREAMING_FALLBACK_MESSAGE = 'AI provider did not support streaming. Falling back to normal mode.';
 
@@ -30,6 +30,24 @@ function shouldFallbackFromStreaming(error: unknown, signal?: AbortSignal): bool
   }
   const code = (error as { code?: string } | null)?.code;
   return code === 'invalid_response' || code === 'provider_error' || code === 'network_error';
+}
+
+function isQualityValidationError(error: unknown): error is AiProviderError {
+  if (!(error instanceof AiProviderError) || error.code !== 'invalid_response') {
+    return false;
+  }
+  return error.message.includes('too short') || error.message.includes('too close');
+}
+
+function buildQualityRepairMessage(error: AiProviderError): ChatMessage {
+  return {
+    role: 'user',
+    content: [
+      `Previous AI response failed quality validation: ${error.message}`,
+      'Please regenerate the candidates and produce a complete rewritten article, not a summary or lightly edited copy.',
+      'Keep the rewritten body close to the original article length, preserve concrete facts, and return only the same JSON shape.',
+    ].join('\n'),
+  };
 }
 
 export function parseRewriteCandidates(content: string): AiRewriteCandidate[] {
@@ -92,7 +110,7 @@ async function requestRewriteCandidates(
   candidateCount: 1 | 2 | 3,
   fetchImpl: AiFetch = fetch
 ): Promise<AiRewriteResult> {
-  const messages = buildRewriteMessages({
+  const baseMessages = buildRewriteMessages({
       source,
       style: request.style,
       rewritePrompt: request.rewritePrompt,
@@ -100,6 +118,35 @@ async function requestRewriteCandidates(
       segment: request.segment,
       candidateCount,
     });
+  let qualityError: AiProviderError | null = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const messages = qualityError
+      ? [...baseMessages, buildQualityRepairMessage(qualityError)]
+      : baseMessages;
+    const raw = await requestProviderCompletion(request, messages, fetchImpl);
+    try {
+      return {
+        raw,
+        candidates: validateRewriteCandidates(parseRewriteCandidates(raw), source),
+      };
+    } catch (error) {
+      if (attempt === 0 && isQualityValidationError(error)) {
+        qualityError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw qualityError || new AiProviderError('invalid_response', 'AI response failed quality validation.');
+}
+
+async function requestProviderCompletion(
+  request: AiRewriteRequest,
+  messages: ChatMessage[],
+  fetchImpl: AiFetch
+): Promise<string> {
   let raw: string;
   if (request.onStreamChunk) {
     try {
@@ -120,11 +167,7 @@ async function requestRewriteCandidates(
   } else {
     raw = await createChatCompletion(request.provider, messages, fetchImpl, request.signal);
   }
-
-  return {
-    raw,
-    candidates: validateRewriteCandidates(parseRewriteCandidates(raw), source),
-  };
+  return raw;
 }
 
 async function generateSegmentedRewriteCandidate(

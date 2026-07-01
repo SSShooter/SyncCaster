@@ -183,6 +183,53 @@ describe('generateRewriteCandidates', () => {
     )).rejects.toThrow('AI candidate was too short');
   });
 
+  it('retries once with repair instructions when a candidate is too short', async () => {
+    const original = 'Original body paragraph with enough detail. '.repeat(20);
+    const repaired = 'Rewritten body paragraph with enough preserved detail. '.repeat(12);
+    const requestBodies: any[] = [];
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      const content = fetchImpl.mock.calls.length === 1
+        ? '{"candidates":[{"title":"Short","bodyMd":"Too short","style":"balanced"}]}'
+        : JSON.stringify({
+            candidates: [{ title: 'Rewritten', bodyMd: repaired, style: 'balanced' }],
+          });
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: { content },
+            },
+          ],
+        }),
+      });
+    });
+
+    const result = await generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: original,
+        },
+        candidateCount: 1,
+      },
+      fetchImpl as any
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(requestBodies[1].messages)).toContain('Previous AI response failed quality validation');
+    expect(JSON.stringify(requestBodies[1].messages)).toContain('produce a complete rewritten article');
+    expect(result.candidates[0]).toMatchObject({ title: 'Rewritten', bodyMd: repaired });
+  });
+
   it('rejects candidates that are unchanged from the original article', async () => {
     const original = 'Original body paragraph. '.repeat(4);
     const fetchImpl = vi.fn().mockResolvedValue({

@@ -169,7 +169,20 @@ export function getRewriteJobStatusText(job: RewriteJob | null, now: number, isC
     return seconds ? `AI 生成完成，用时约 ${seconds} 秒。` : 'AI 生成完成。';
   }
   const prefix = isCurrentRequest ? '本次 AI 生成失败' : '上次 AI 生成失败';
-  return `${prefix}：${job.errorMessage || '请求失败'}`;
+  return `${prefix}：${formatRewriteJobErrorMessage(job.errorMessage)}`;
+}
+
+function formatRewriteJobErrorMessage(message?: string): string {
+  if (!message) {
+    return '请求失败';
+  }
+  if (message.includes('AI candidate was too short')) {
+    return 'AI 返回的文案太短，已自动重试后仍不合格。可以换个模板或降低压缩倾向后再试。';
+  }
+  if (message.includes('AI candidate was too close to the original')) {
+    return 'AI 返回的文案与原文过于接近，已自动重试后仍不合格。可以换个模板或提高改写要求后再试。';
+  }
+  return message;
 }
 
 export function mergePostMetaWithRewriteDraft(meta: Record<string, any> | undefined, draft: RewriteDraft) {
