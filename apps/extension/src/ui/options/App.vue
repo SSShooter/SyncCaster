@@ -126,8 +126,8 @@
                 @click="navigate(item.path)"
               >
                 <div class="flex items-center gap-2">
-                  <span class="text-base transition-transform group-hover:scale-110">{{ item.icon }}</span>
-                  <span class="text-sm font-medium">{{ item.label }}</span>
+                  <span class="nav-icon text-base transition-transform group-hover:scale-110">{{ item.icon }}</span>
+                  <span class="text-sm font-medium leading-5">{{ item.label }}</span>
                 </div>
                 <div 
                   v-if="currentPath === item.path"
@@ -242,7 +242,7 @@ const navItems = [
   { path: 'posts', label: '文章管理', icon: '📝' },
   { path: 'accounts', label: '账号管理', icon: '👤' },
   { path: 'tasks', label: '任务中心', icon: '⚙️' },
-  { path: 'ai-settings', label: 'AI 设置', icon: 'AI' },
+  { path: 'ai-settings', label: 'AI 设置', icon: '🤖' },
 ];
 
 // 导出选项
@@ -777,6 +777,16 @@ async function exportAsPng(title: string) {
 .bg-clip-text {
   -webkit-background-clip: text;
   background-clip: text;
+}
+
+.nav-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 /* 全局禁用文本选择（默认） */
