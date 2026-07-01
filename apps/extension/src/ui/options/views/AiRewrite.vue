@@ -119,6 +119,7 @@ import {
   type ForegroundRewriteError,
   type ForegroundRewriteEvent,
 } from '../ai/foreground-rewrite';
+import { loadForegroundAiProviderSettings } from '../ai/foreground-settings';
 import { requestAiHostPermission } from '../ai/host-permissions';
 import {
   buildRewriteJobDone,
@@ -166,8 +167,6 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let generateController: AbortController | null = null;
 
 const AI_REQUEST_TIMEOUT_MS = 120_000;
-const AI_CONFIG_ID = 'ai.rewrite.config';
-const AI_SECRET_ID = 'ai.openai.apiKey';
 
 const postId = computed(() => {
   const hash = window.location.hash.replace(/^#\/?/, '');
@@ -309,12 +308,7 @@ async function generate() {
     setLocalGenerationStage('saving_job');
     await saveJob(runningJob);
     setLocalGenerationStage('loading_config');
-    const configRecord = await db.config.get(AI_CONFIG_ID) as any;
-    const secret = await db.secrets.get(AI_SECRET_ID) as any;
-    const config = configRecord?.value;
-    if (!config?.baseUrl || !config?.model || !secret?.encrypted) {
-      throw new Error('请先在 AI 设置中填写 API 地址、模型和 API Key。');
-    }
+    const { config, apiKey } = await loadForegroundAiProviderSettings();
     activeTimeoutMs.value = getConfiguredTimeoutMs(config);
     setLocalGenerationStage('checking_permission');
     const granted = await requestAiHostPermission(config.baseUrl);
@@ -324,7 +318,7 @@ async function generate() {
     requestedCount.value = config.candidateCount || 1;
     const result = await runForegroundRewriteCandidates({
       config,
-      apiKey: secret.encrypted,
+      apiKey,
       source: {
         postId: post.value.id,
         title: post.value.title || '',
@@ -448,12 +442,7 @@ async function generateOneMore() {
     setLocalGenerationStage('saving_job');
     await saveJob(runningJob);
     setLocalGenerationStage('loading_config');
-    const configRecord = await db.config.get(AI_CONFIG_ID) as any;
-    const secret = await db.secrets.get(AI_SECRET_ID) as any;
-    const config = configRecord?.value;
-    if (!config?.baseUrl || !config?.model || !secret?.encrypted) {
-      throw new Error('请先在 AI 设置中填写 API 地址、模型和 API Key。');
-    }
+    const { config, apiKey } = await loadForegroundAiProviderSettings();
     activeTimeoutMs.value = getConfiguredTimeoutMs(config);
     setLocalGenerationStage('checking_permission');
     const granted = await requestAiHostPermission(config.baseUrl);
@@ -465,7 +454,7 @@ async function generateOneMore() {
         ...config,
         candidateCount: 1,
       },
-      apiKey: secret.encrypted,
+      apiKey,
       source: {
         postId: post.value.id,
         title: post.value.title || '',

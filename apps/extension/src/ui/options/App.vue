@@ -198,6 +198,7 @@ import TasksView from './views/Tasks.vue';
 import EditorView from './views/Editor.vue';
 import AiSettingsView from './views/AiSettings.vue';
 import AiRewriteView from './views/AiRewrite.vue';
+import { resolveOptionsRoute } from './options-route';
 
 const isDark = ref(false);
 const theme = computed(() => isDark.value ? darkTheme : null);
@@ -271,6 +272,7 @@ const components: Record<string, any> = {
   accounts: AccountsView,
   tasks: TasksView,
   'ai-settings': AiSettingsView,
+  'ai-rewrite': AiRewriteView,
   editor: EditorView,
 };
 
@@ -352,26 +354,26 @@ function navigate(path: string) {
 
 function updateRouteFromHash() {
   const raw = window.location.hash.slice(1);
-  const hash = raw.startsWith('/') ? raw.slice(1) : raw;
-  if (!hash) {
+  const route = resolveOptionsRoute(raw);
+  if (!raw) {
     navigate('dashboard');
     return;
   }
-  if (hash.startsWith('ai-rewrite/')) {
-    currentPath.value = 'ai-settings';
-    currentComponent.value = AiRewriteView;
+  if (route.view === 'ai-rewrite') {
+    currentPath.value = route.navPath;
+    currentComponent.value = components[route.view];
     return;
   }
   // 支持 editor/<id>
-  if (hash.startsWith('editor/')) {
-    currentPath.value = 'editor';
-    currentComponent.value = EditorView;
+  if (route.view === 'editor') {
+    currentPath.value = route.navPath;
+    currentComponent.value = components[route.view];
     return;
   }
-  if (components[hash]) {
+  if (components[route.view]) {
     // 触发自定义事件，允许 Editor 等组件拦截导航
     const event = new CustomEvent('beforenavigate', { 
-      detail: { targetPath: hash }, 
+      detail: { targetPath: route.view },
       cancelable: true 
     });
     const cancelled = !window.dispatchEvent(event);
@@ -379,8 +381,8 @@ function updateRouteFromHash() {
       // 导航被拦截，恢复 hash
       return;
     }
-    currentPath.value = hash;
-    currentComponent.value = components[hash];
+    currentPath.value = route.navPath;
+    currentComponent.value = components[route.view];
     return;
   }
   // 默认
