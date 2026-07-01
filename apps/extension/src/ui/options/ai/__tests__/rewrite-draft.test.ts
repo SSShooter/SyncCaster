@@ -179,6 +179,17 @@ describe('rewrite job persistence', () => {
     expect(isRewriteJobForRequest(null, 'request-1')).toBe(false);
   });
 
+  it('describes running jobs as background generation', () => {
+    const running = buildRewriteJobRunning({
+      requestId: 'request-1',
+      style: 'less_ai',
+      startedAt: '2026-06-30T00:00:00.000Z',
+    });
+
+    expect(getRewriteJobStatusText(running, Date.parse('2026-06-30T00:00:12.000Z'), true))
+      .toBe('AI 正在后台逐个生成，已等待 12 秒。可以离开页面，稍后回来查看结果。');
+  });
+
   it('labels stale error jobs as previous generation failures', () => {
     const error = buildRewriteJobError({
       requestId: 'request-1',

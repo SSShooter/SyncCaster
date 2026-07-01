@@ -27,10 +27,12 @@ export const DEFAULT_AI_REWRITE_CONFIG = {
 
 type ConfigTable = Pick<typeof db.config, 'get' | 'put'>;
 type SecretsTable = Pick<typeof db.secrets, 'get' | 'put' | 'delete'>;
+type PostsTable = Pick<typeof db.posts, 'get' | 'put'>;
 
 export interface AiServiceDeps {
   configTable: ConfigTable;
   secretsTable: SecretsTable;
+  postsTable: PostsTable;
   now: () => number;
   generateRewriteCandidates: typeof generateRewriteCandidates;
   testOpenAiConnection: typeof testOpenAiConnection;
@@ -40,6 +42,7 @@ function createDefaultDeps(): AiServiceDeps {
   return {
     configTable: db.config,
     secretsTable: db.secrets,
+    postsTable: db.posts,
     now: () => Date.now(),
     generateRewriteCandidates,
     testOpenAiConnection,
@@ -53,6 +56,7 @@ export function isAiMessageType(type: string): boolean {
     'AI_CLEAR_API_KEY',
     'AI_TEST_CONNECTION',
     'AI_GENERATE_CANDIDATES',
+    'AI_START_REWRITE_JOB',
   ].includes(type);
 }
 
@@ -155,6 +159,212 @@ async function requireProviderConfig(deps: AiServiceDeps) {
   };
 }
 
+function createRequestId() {
+  return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildRewriteJobRunning(input: {
+  requestId: string;
+  style: string;
+  startedAt: string;
+}) {
+  return {
+    requestId: input.requestId,
+    style: input.style,
+    status: 'running',
+    startedAt: input.startedAt,
+  };
+}
+
+function buildRewriteJobDone(input: {
+  requestId: string;
+  style: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+}) {
+  return {
+    requestId: input.requestId,
+    style: input.style,
+    status: 'done',
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+    durationMs: input.durationMs,
+  };
+}
+
+function buildRewriteJobError(input: {
+  requestId: string;
+  style: string;
+  startedAt: string;
+  finishedAt: string;
+  errorMessage: string;
+}) {
+  return {
+    requestId: input.requestId,
+    style: input.style,
+    status: 'error',
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+    errorMessage: input.errorMessage,
+  };
+}
+
+function createNextCandidateId(candidates: any[]): string {
+  const maxId = candidates.reduce((max, candidate) => {
+    const match = /^candidate-(\d+)$/.exec(String(candidate?.id || ''));
+    const value = match ? Number(match[1]) : 0;
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 0);
+  return `candidate-${maxId + 1}`;
+}
+
+function appendCandidate(candidates: any[], candidate: any, maxCandidates = 3) {
+  const normalized = {
+    ...candidate,
+    id: createNextCandidateId(candidates),
+  };
+  return [...candidates, normalized].slice(-maxCandidates);
+}
+
+function buildRewriteDraft(input: {
+  style: string;
+  existingDraft?: any;
+  candidates: any[];
+  append?: boolean;
+  generatedAt: string;
+}) {
+  const existingCandidates = input.append && Array.isArray(input.existingDraft?.candidates)
+    ? input.existingDraft.candidates
+    : [];
+  const candidates = input.append
+    ? input.candidates.reduce((current, candidate) => appendCandidate(current, candidate), existingCandidates)
+    : input.candidates.map((candidate, index) => ({
+        ...candidate,
+        id: candidate.id || `candidate-${index + 1}`,
+      })).slice(-3);
+  const existingSelectedId = input.existingDraft?.selectedCandidateId;
+  const selectedCandidateId = candidates.some((candidate) => candidate.id === existingSelectedId)
+    ? existingSelectedId
+    : candidates[0]?.id || '';
+  return {
+    style: input.style,
+    candidates,
+    selectedCandidateId,
+    generatedAt: input.generatedAt,
+  };
+}
+
+async function savePostMeta(deps: AiServiceDeps, post: any, meta: Record<string, any>) {
+  await deps.postsTable.put({
+    ...post,
+    meta,
+  });
+}
+
+export async function runAiRewriteJob(input: {
+  postId: string;
+  requestId: string;
+  rewritePromptId?: string;
+  candidateCount?: 1 | 2 | 3;
+  append?: boolean;
+}, deps: AiServiceDeps = createDefaultDeps()) {
+  const startedAtMs = deps.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  const style = input.rewritePromptId || 'general';
+  const post = await deps.postsTable.get(input.postId);
+  if (!post) {
+    throw new Error('Post not found.');
+  }
+
+  await savePostMeta(deps, post, {
+    ...(post.meta || {}),
+    aiRewriteJob: buildRewriteJobRunning({
+      requestId: input.requestId,
+      style,
+      startedAt,
+    }),
+  });
+
+  try {
+    const { settings, provider } = await requireProviderConfig(deps);
+    const rewritePrompt = resolveRewritePrompt(settings.config, input.rewritePromptId);
+    const result = await deps.generateRewriteCandidates({
+      provider,
+      source: {
+        postId: post.id,
+        title: post.title || '',
+        bodyMd: post.body_md || '',
+        sourceUrl: post.meta?.source_url || post.canonicalUrl || post.source_url || '',
+      },
+      rewritePrompt,
+      style: settings.config.defaultStyle,
+      humanizeLevel: settings.config.humanizeLevel,
+      candidateCount: input.candidateCount || settings.config.candidateCount,
+    });
+    if (result.candidates.length === 0) {
+      throw new Error('AI generated no usable candidates.');
+    }
+
+    const latestPost = await deps.postsTable.get(input.postId);
+    if (!latestPost) {
+      throw new Error('Post not found.');
+    }
+    const finishedAtMs = deps.now();
+    const draft = buildRewriteDraft({
+      style,
+      existingDraft: latestPost.meta?.aiRewriteDraft,
+      candidates: result.candidates,
+      append: input.append,
+      generatedAt: new Date(finishedAtMs).toISOString(),
+    });
+    await savePostMeta(deps, latestPost, {
+      ...(latestPost.meta || {}),
+      aiRewriteDraft: draft,
+      aiRewriteJob: buildRewriteJobDone({
+        requestId: input.requestId,
+        style,
+        startedAt,
+        finishedAt: new Date(finishedAtMs).toISOString(),
+        durationMs: Math.max(0, finishedAtMs - startedAtMs),
+      }),
+    });
+    return result;
+  } catch (error: any) {
+    const latestPost = await deps.postsTable.get(input.postId);
+    if (latestPost) {
+      const finishedAtMs = deps.now();
+      await savePostMeta(deps, latestPost, {
+        ...(latestPost.meta || {}),
+        aiRewriteJob: buildRewriteJobError({
+          requestId: input.requestId,
+          style,
+          startedAt,
+          finishedAt: new Date(finishedAtMs).toISOString(),
+          errorMessage: error?.message || 'AI rewrite job failed.',
+        }),
+      });
+    }
+    throw error;
+  }
+}
+
+export async function startAiRewriteJob(input: {
+  postId: string;
+  rewritePromptId?: string;
+  candidateCount?: 1 | 2 | 3;
+  append?: boolean;
+}, deps: AiServiceDeps = createDefaultDeps()) {
+  const requestId = createRequestId();
+  void runAiRewriteJob({
+    ...input,
+    requestId,
+  }, deps).catch(() => undefined);
+  return {
+    requestId,
+  };
+}
+
 export async function handleAiMessage(message: any, deps: AiServiceDeps = createDefaultDeps()) {
   try {
     switch (message.type) {
@@ -182,6 +392,10 @@ export async function handleAiMessage(message: any, deps: AiServiceDeps = create
           candidateCount: settings.config.candidateCount,
         });
         return { success: true, result };
+      }
+      case 'AI_START_REWRITE_JOB': {
+        const job = await startAiRewriteJob(message.data, deps);
+        return { success: true, ...job };
       }
       default:
         return { success: false, error: `Unknown AI message type: ${message.type}` };

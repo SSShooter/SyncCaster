@@ -114,28 +114,20 @@ import { toCloneable } from '../ai/cloneable';
 import { aiClient } from '../ai/client';
 import {
   DEFAULT_FOREGROUND_AI_REQUEST_TIMEOUT_MS,
-  runForegroundRewriteCandidates,
   type ForegroundRewriteDiagnostics,
   type ForegroundRewriteError,
   type ForegroundRewriteEvent,
 } from '../ai/foreground-rewrite';
-import { loadForegroundAiProviderSettings } from '../ai/foreground-settings';
 import { requestAiHostPermission } from '../ai/host-permissions';
 import {
-  buildRewriteJobDone,
   buildRewriteJobError,
   buildRewriteJobRunning,
-  appendRewriteCandidateToDraft,
-  buildRewriteDraft,
   buildSelectedRewriteDraft,
-  createNextRewriteCandidateId,
   getRewriteDraft,
   getRewriteJob,
   getRewriteJobStatusText,
-  isRewriteJobForRequest,
   isRewriteJobExpired,
   mergePostMetaWithRewriteJob,
-  mergePostMetaWithRewriteDraft,
   type RewriteJob,
 } from '../ai/rewrite-draft';
 
@@ -164,9 +156,9 @@ const requestedCount = ref(0);
 const nowTick = ref(Date.now());
 const streamingPreview = ref('');
 let timer: ReturnType<typeof setInterval> | null = null;
-let generateController: AbortController | null = null;
+let pollingRewriteState = false;
 
-const AI_REQUEST_TIMEOUT_MS = 120_000;
+const AI_REQUEST_TIMEOUT_MS = 600_000;
 
 const postId = computed(() => {
   const hash = window.location.hash.replace(/^#\/?/, '');
@@ -179,7 +171,7 @@ const rewritePromptOptions = computed(() => rewritePrompts.value.map((item) => (
   label: item.name || '未命名模板',
   value: item.id,
 })));
-const generationModeText = computed(() => `前台直连模式 / 单个候选最多等待 ${Math.round(activeTimeoutMs.value / 1000)} 秒`);
+const generationModeText = computed(() => `后台生成模式 / 单次最多等待 ${Math.round(activeTimeoutMs.value / 1000)} 秒，可离开页面后再回来查看结果`);
 const generationProgressText = computed(() => {
   if (generating.value && requestedCount.value > 0) {
     return `正在逐个生成候选：${generatedCount.value}/${requestedCount.value}`;
@@ -238,6 +230,35 @@ const jobStatusClass = computed(() => {
 
 const propsIsDark = computed(() => Boolean(props.isDark));
 
+function applyPostRewriteState(latestPost: any) {
+  post.value = latestPost;
+  const draft = getRewriteDraft(latestPost);
+  rewriteJob.value = getRewriteJob(latestPost);
+  if (draft) {
+    candidates.value = draft.candidates;
+    selectedId.value = draft.selectedCandidateId || draft.candidates[0]?.id || '';
+  }
+  generatedCount.value = candidates.value.length;
+  if (rewriteJob.value?.status === 'done' || rewriteJob.value?.status === 'error') {
+    generating.value = false;
+  }
+}
+
+async function refreshRewriteState() {
+  if (!post.value?.id || pollingRewriteState) {
+    return;
+  }
+  pollingRewriteState = true;
+  try {
+    const latestPost = await db.posts.get(post.value.id);
+    if (latestPost) {
+      applyPostRewriteState(latestPost);
+    }
+  } finally {
+    pollingRewriteState = false;
+  }
+}
+
 async function loadPost() {
   loading.value = true;
   try {
@@ -278,8 +299,8 @@ async function loadPost() {
   }
 }
 
-async function generate() {
-  if (!post.value) {
+async function startBackgroundRewrite(append: boolean) {
+  if (generating.value || !post.value || (append && candidates.value.length === 0)) {
     return;
   }
   generating.value = true;
@@ -288,238 +309,55 @@ async function generate() {
   generationEvent.value = null;
   generationElapsedMs.value = null;
   streamingPreview.value = '';
-  generatedCount.value = 0;
-  requestedCount.value = 0;
-  candidates.value = [];
-  selectedId.value = '';
-  generateController?.abort();
-  generateController = new AbortController();
+  if (!append) {
+    generatedCount.value = 0;
+    requestedCount.value = 0;
+    candidates.value = [];
+    selectedId.value = '';
+  } else {
+    generatedCount.value = candidates.value.length;
+    requestedCount.value = candidates.value.length + 1;
+  }
   const startedAtMs = Date.now();
   generationStartedAtMs.value = startedAtMs;
-  const startedAt = new Date(startedAtMs).toISOString();
-  const requestId = crypto.randomUUID?.() || `${startedAtMs}-${Math.random().toString(36).slice(2, 8)}`;
-  activeRequestId.value = requestId;
-  const runningJob = buildRewriteJobRunning({
-    requestId,
-    style: selectedPromptId.value,
-    startedAt,
-  });
   try {
-    setLocalGenerationStage('saving_job');
-    await saveJob(runningJob);
     setLocalGenerationStage('loading_config');
-    const { config, apiKey } = await loadForegroundAiProviderSettings();
+    const configResponse = await aiClient.getConfig();
+    const config = configResponse.config;
     activeTimeoutMs.value = getConfiguredTimeoutMs(config);
     setLocalGenerationStage('checking_permission');
     const granted = await requestAiHostPermission(config.baseUrl);
     if (!granted) {
-      throw new Error('未授予 AI 服务域名权限，请到 AI 设置中保存并允许访问该地址。');
+      throw new Error('未授权 AI 服务域名，请到 AI 设置中保存并允许访问该地址。');
     }
-    requestedCount.value = config.candidateCount || 1;
-    const result = await runForegroundRewriteCandidates({
-      config,
-      apiKey,
-      source: {
-        postId: post.value.id,
-        title: post.value.title || '',
-        bodyMd: post.value.body_md || '',
-        sourceUrl: sourceUrl.value,
-      },
+    requestedCount.value = append ? candidates.value.length + 1 : (config.candidateCount || 1);
+    setLocalGenerationStage('saving_job');
+    const response = await aiClient.startRewriteJob({
+      postId: post.value.id,
       rewritePromptId: selectedPromptId.value,
-      signal: generateController.signal,
-      onCandidate: (candidate) => appendCandidateForRequest(candidate, requestId),
-      onEvent: handleGenerationEvent,
+      candidateCount: append ? 1 : config.candidateCount,
+      append,
     });
-    generationErrors.value = result.errors;
-    generationDiagnostics.value = result.diagnostics;
-    const latestPost = await db.posts.get(post.value.id);
-    if (!isRewriteJobForRequest(getRewriteJob(latestPost), requestId)) {
-      return;
-    }
-    post.value = latestPost;
-    if (result.candidates.length === 0) {
-      throw new Error(result.errors[0]?.message || 'AI 未生成可用文案。');
-    }
-    const draft = toCloneable(buildRewriteDraft({
+    activeRequestId.value = response.requestId;
+    rewriteJob.value = buildRewriteJobRunning({
+      requestId: response.requestId,
       style: selectedPromptId.value,
-      candidates: candidates.value,
-      selectedCandidateId: selectedId.value,
-      generatedAt: new Date().toISOString(),
-    }));
-    const doneJob = toCloneable(buildRewriteJobDone({
-      requestId,
-      style: selectedPromptId.value,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      durationMs: Date.now() - startedAtMs,
-    }));
-    const meta = toCloneable(mergePostMetaWithRewriteJob(mergePostMetaWithRewriteDraft(post.value.meta, draft), doneJob));
-    await db.posts.update(post.value.id, {
-      meta,
-    } as any);
-    post.value = {
-      ...post.value,
-      meta: toCloneable(meta),
-    };
-    rewriteJob.value = doneJob;
+      startedAt: new Date(startedAtMs).toISOString(),
+    });
+    message.info('AI 已在后台开始生成，离开页面后也可以回来查看结果。');
+    await refreshRewriteState();
   } catch (error: any) {
-    const latestPost = await db.posts.get(post.value.id);
-    if (isRewriteJobForRequest(getRewriteJob(latestPost), requestId)) {
-      post.value = latestPost;
-      await saveJob(buildRewriteJobError({
-        requestId,
-        style: selectedPromptId.value,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        errorMessage: error?.message || 'AI 生成失败',
-      }));
-    }
-    if (error?.code !== 'canceled' && error?.message !== 'AI request was canceled.') {
-      message.error(error?.message || 'AI 生成失败');
-    }
-  } finally {
     generating.value = false;
-    generateController = null;
+    message.error(error?.message || 'AI 生成失败');
   }
 }
 
-async function appendCandidateForRequest(candidate: any, requestId: string) {
-  if (!post.value?.id) {
-    return;
-  }
-  const latestPost = await db.posts.get(post.value.id);
-  if (!isRewriteJobForRequest(getRewriteJob(latestPost), requestId)) {
-    return;
-  }
-  post.value = latestPost;
-  const candidateId = createNextRewriteCandidateId(candidates.value);
-  const normalized = {
-    ...candidate,
-    id: candidateId,
-  };
-  const draft = toCloneable(appendRewriteCandidateToDraft(buildRewriteDraft({
-    style: selectedPromptId.value,
-    candidates: candidates.value,
-    selectedCandidateId: selectedId.value || normalized.id,
-    generatedAt: new Date().toISOString(),
-  }), normalized));
-  candidates.value = draft.candidates;
-  generatedCount.value = candidates.value.length;
-  selectedId.value = draft.selectedCandidateId;
-  const meta = toCloneable(mergePostMetaWithRewriteDraft(post.value.meta, draft));
-  await db.posts.update(post.value.id, { meta } as any);
-  post.value = {
-    ...post.value,
-    meta: toCloneable(meta),
-  };
+async function generate() {
+  await startBackgroundRewrite(false);
 }
 
 async function generateOneMore() {
-  if (!post.value || generating.value || candidates.value.length === 0) {
-    return;
-  }
-  generating.value = true;
-  generationErrors.value = [];
-  generationDiagnostics.value = null;
-  generationEvent.value = null;
-  generationElapsedMs.value = null;
-  streamingPreview.value = '';
-  generatedCount.value = candidates.value.length;
-  requestedCount.value = candidates.value.length + 1;
-  generateController?.abort();
-  generateController = new AbortController();
-  const startedAtMs = Date.now();
-  generationStartedAtMs.value = startedAtMs;
-  const startedAt = new Date(startedAtMs).toISOString();
-  const requestId = crypto.randomUUID?.() || `${startedAtMs}-${Math.random().toString(36).slice(2, 8)}`;
-  activeRequestId.value = requestId;
-  const runningJob = buildRewriteJobRunning({
-    requestId,
-    style: selectedPromptId.value,
-    startedAt,
-  });
-  try {
-    setLocalGenerationStage('saving_job');
-    await saveJob(runningJob);
-    setLocalGenerationStage('loading_config');
-    const { config, apiKey } = await loadForegroundAiProviderSettings();
-    activeTimeoutMs.value = getConfiguredTimeoutMs(config);
-    setLocalGenerationStage('checking_permission');
-    const granted = await requestAiHostPermission(config.baseUrl);
-    if (!granted) {
-      throw new Error('未授予 AI 服务域名权限，请到 AI 设置中保存并允许访问该地址。');
-    }
-    const result = await runForegroundRewriteCandidates({
-      config: {
-        ...config,
-        candidateCount: 1,
-      },
-      apiKey,
-      source: {
-        postId: post.value.id,
-        title: post.value.title || '',
-        bodyMd: post.value.body_md || '',
-        sourceUrl: sourceUrl.value,
-      },
-      rewritePromptId: selectedPromptId.value,
-      candidateCount: 1,
-      signal: generateController.signal,
-      onCandidate: (candidate) => appendCandidateForRequest(candidate, requestId),
-      onEvent: handleGenerationEvent,
-    });
-    generationErrors.value = result.errors;
-    generationDiagnostics.value = {
-      ...result.diagnostics,
-      requestedCount: requestedCount.value,
-      finishedCount: candidates.value.length,
-    };
-    const latestPost = await db.posts.get(post.value.id);
-    if (!isRewriteJobForRequest(getRewriteJob(latestPost), requestId)) {
-      return;
-    }
-    post.value = latestPost;
-    if (result.candidates.length === 0) {
-      throw new Error(result.errors[0]?.message || 'AI 未生成可用文案。');
-    }
-    const draft = toCloneable(buildRewriteDraft({
-      style: selectedPromptId.value,
-      candidates: candidates.value,
-      selectedCandidateId: selectedId.value,
-      generatedAt: new Date().toISOString(),
-    }));
-    const doneJob = toCloneable(buildRewriteJobDone({
-      requestId,
-      style: selectedPromptId.value,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      durationMs: Date.now() - startedAtMs,
-    }));
-    const meta = toCloneable(mergePostMetaWithRewriteJob(mergePostMetaWithRewriteDraft(post.value.meta, draft), doneJob));
-    await db.posts.update(post.value.id, { meta } as any);
-    post.value = {
-      ...post.value,
-      meta: toCloneable(meta),
-    };
-    rewriteJob.value = doneJob;
-  } catch (error: any) {
-    const latestPost = await db.posts.get(post.value.id);
-    if (isRewriteJobForRequest(getRewriteJob(latestPost), requestId)) {
-      post.value = latestPost;
-      await saveJob(buildRewriteJobError({
-        requestId,
-        style: selectedPromptId.value,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        errorMessage: error?.message || 'AI 生成失败',
-      }));
-    }
-    if (error?.code !== 'canceled' && error?.message !== 'AI request was canceled.') {
-      message.error(error?.message || 'AI 生成失败');
-    }
-  } finally {
-    generating.value = false;
-    generateController = null;
-  }
+  await startBackgroundRewrite(true);
 }
 
 async function saveJob(job: RewriteJob) {
@@ -533,21 +371,6 @@ async function saveJob(job: RewriteJob) {
     meta: toCloneable(meta),
   };
   rewriteJob.value = job;
-}
-
-function handleGenerationEvent(event: ForegroundRewriteEvent) {
-  generationEvent.value = event;
-  generatedCount.value = event.finishedCount;
-  requestedCount.value = event.requestedCount;
-  if (event.stage === 'stream_chunk') {
-    streamingPreview.value = event.message || '';
-  }
-  if (event.stage === 'candidate_saved') {
-    streamingPreview.value = '';
-  }
-  if (event.stage === 'finished' || event.stage === 'candidate_error') {
-    generationElapsedMs.value = event.elapsedMs;
-  }
 }
 
 function setLocalGenerationStage(stage: ForegroundRewriteEvent['stage']) {
@@ -570,7 +393,7 @@ function getConfiguredTimeoutMs(config: any) {
 }
 
 function cancelGenerate() {
-  generateController?.abort();
+  message.warning('后台生成启动后暂不支持取消，可以稍后回来查看结果。');
 }
 
 async function useSelected() {
@@ -626,12 +449,14 @@ function countWords(value: string) {
 onMounted(() => {
   timer = setInterval(() => {
     nowTick.value = Date.now();
+    if (rewriteJob.value?.status === 'running') {
+      refreshRewriteState();
+    }
   }, 1000);
   loadPost();
 });
 
 onBeforeUnmount(() => {
-  generateController?.abort();
   if (timer) {
     clearInterval(timer);
   }

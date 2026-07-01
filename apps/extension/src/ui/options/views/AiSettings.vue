@@ -112,6 +112,7 @@
         <div class="settings-note" :class="isDark ? 'bg-gray-900/70 text-gray-400' : 'bg-gray-50 text-gray-500'">
           <div>API Key 仅保存在本机扩展存储中。</div>
           <div>生成文案时会把 API Key 发送到你配置的 AI 服务地址。</div>
+          <div>打包扩展不会包含 API Key，也不会上传到 SyncCaster 或我们的服务器。</div>
         </div>
 
         <div class="settings-actions">

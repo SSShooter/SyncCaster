@@ -7,6 +7,7 @@ import {
   isAiMessageType,
   loadAiRewriteSettings,
   saveAiRewriteSettings,
+  runAiRewriteJob,
 } from '../ai-service';
 
 function createTable<T extends { id: string }>() {
@@ -29,6 +30,7 @@ function createDeps() {
   return {
     configTable: createTable<any>(),
     secretsTable: createTable<any>(),
+    postsTable: createTable<any>(),
     now: () => 123,
     generateRewriteCandidates: vi.fn(),
     testOpenAiConnection: vi.fn(),
@@ -176,6 +178,54 @@ describe('ai-service settings storage', () => {
 
     await saveAiRewriteSettings({ timeoutMs: 900_000 }, deps);
     expect((await loadAiRewriteSettings(deps)).config.timeoutMs).toBe(600_000);
+  });
+});
+
+describe('ai rewrite background jobs', () => {
+  it('persists generated candidates and marks the post job done', async () => {
+    const deps = createDeps();
+    deps.generateRewriteCandidates.mockResolvedValue({
+      raw: '{"candidates":[]}',
+      candidates: [
+        { id: 'candidate-1', title: 'New title', bodyMd: 'New body', style: 'balanced' },
+      ],
+    });
+    deps.postsTable.rows.set('post-1', {
+      id: 'post-1',
+      title: 'Original title',
+      body_md: 'Original body',
+      meta: { source_url: 'https://example.com/post' },
+    });
+
+    await saveAiRewriteSettings(
+      {
+        enabled: true,
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'sk-local',
+        model: 'gpt-4o-mini',
+        temperature: 0.4,
+        candidateCount: 1,
+      },
+      deps
+    );
+
+    const result = await runAiRewriteJob({
+      postId: 'post-1',
+      requestId: 'request-1',
+      rewritePromptId: 'general',
+      candidateCount: 1,
+    }, deps);
+
+    expect(result.candidates).toHaveLength(1);
+    const post = deps.postsTable.rows.get('post-1');
+    expect(post.meta.aiRewriteDraft.candidates).toEqual([
+      { id: 'candidate-1', title: 'New title', bodyMd: 'New body', style: 'balanced' },
+    ]);
+    expect(post.meta.aiRewriteJob).toMatchObject({
+      requestId: 'request-1',
+      status: 'done',
+      style: 'general',
+    });
   });
 });
 

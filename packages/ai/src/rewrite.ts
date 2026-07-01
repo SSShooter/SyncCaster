@@ -61,6 +61,31 @@ export function parseRewriteCandidates(content: string): AiRewriteCandidate[] {
   });
 }
 
+function normalizeForQualityCheck(value: string): string {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function validateRewriteCandidates(
+  candidates: AiRewriteCandidate[],
+  source: AiRewriteRequest['source']
+): AiRewriteCandidate[] {
+  const originalBody = normalizeForQualityCheck(source.bodyMd);
+  const originalTitle = normalizeForQualityCheck(source.title);
+  const originalLength = originalBody.length;
+
+  return candidates.map((candidate, index) => {
+    const body = normalizeForQualityCheck(candidate.bodyMd);
+    const title = normalizeForQualityCheck(candidate.title);
+    if (originalLength >= 120 && body.length < originalLength * 0.25) {
+      throw new AiProviderError('invalid_response', `AI candidate was too short: candidate ${index + 1}.`);
+    }
+    if (originalLength >= 40 && body === originalBody && title === originalTitle) {
+      throw new AiProviderError('invalid_response', `AI candidate was too close to the original: candidate ${index + 1}.`);
+    }
+    return candidate;
+  });
+}
+
 async function requestRewriteCandidates(
   request: AiRewriteRequest,
   source: AiRewriteRequest['source'],
@@ -98,7 +123,7 @@ async function requestRewriteCandidates(
 
   return {
     raw,
-    candidates: parseRewriteCandidates(raw),
+    candidates: validateRewriteCandidates(parseRewriteCandidates(raw), source),
   };
 }
 

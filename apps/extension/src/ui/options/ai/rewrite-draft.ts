@@ -162,7 +162,7 @@ export function getRewriteJobStatusText(job: RewriteJob | null, now: number, isC
   }
   if (job.status === 'running') {
     const seconds = Math.max(0, Math.floor((now - Date.parse(job.startedAt)) / 1000));
-    return `AI 正在逐个生成，已等待 ${seconds} 秒。当前页面会即时保存已生成的候选，关闭页面会中断本次生成。`;
+    return `AI 正在后台逐个生成，已等待 ${seconds} 秒。可以离开页面，稍后回来查看结果。`;
   }
   if (job.status === 'done') {
     const seconds = job.durationMs ? Math.round(job.durationMs / 1000) : null;

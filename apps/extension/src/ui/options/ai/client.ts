@@ -33,4 +33,5 @@ export const aiClient = {
   clearApiKey: () => sendAiMessage<{ success: true; config: any }>('AI_CLEAR_API_KEY'),
   testConnection: () => sendAiMessage<{ success: true }>('AI_TEST_CONNECTION'),
   generateCandidates: (data: any) => sendAiMessage<{ success: true; result: any }>('AI_GENERATE_CANDIDATES', data),
+  startRewriteJob: (data: any) => sendAiMessage<{ success: true; requestId: string }>('AI_START_REWRITE_JOB', data),
 };

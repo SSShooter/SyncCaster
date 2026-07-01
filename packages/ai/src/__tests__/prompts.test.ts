@@ -27,6 +27,8 @@ describe('buildRewriteMessages', () => {
     expect(messages[1].content).toContain('Original title');
     expect(messages[1].content).toContain('Original body');
     expect(messages[1].content).toContain('valid JSON');
+    expect(messages[1].content).toContain('Preserve all numbers, dates, names, links, code blocks, and concrete claims');
+    expect(messages[1].content).toContain('Do not summarize the article into a short abstract');
   });
 
   it('can request a single candidate', () => {

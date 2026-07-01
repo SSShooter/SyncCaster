@@ -150,6 +150,75 @@ describe('generateRewriteCandidates', () => {
     expect(JSON.stringify(body.messages)).toContain('Humanize level: strong');
   });
 
+  it('rejects candidates that are much shorter than the original article', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: '{"candidates":[{"title":"Short","bodyMd":"Too short","style":"balanced"}]}',
+            },
+          },
+        ],
+      }),
+    });
+
+    await expect(generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: 'Original body paragraph. '.repeat(20),
+        },
+        candidateCount: 1,
+      },
+      fetchImpl as any
+    )).rejects.toThrow('AI candidate was too short');
+  });
+
+  it('rejects candidates that are unchanged from the original article', async () => {
+    const original = 'Original body paragraph. '.repeat(4);
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                candidates: [{ title: 'Original', bodyMd: original, style: 'balanced' }],
+              }),
+            },
+          },
+        ],
+      }),
+    });
+
+    await expect(generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: original,
+        },
+        candidateCount: 1,
+      },
+      fetchImpl as any
+    )).rejects.toThrow('AI candidate was too close to the original');
+  });
+
   it('reports accumulated streaming text before parsing the final candidate', async () => {
     const chunks: string[] = [];
     const encoder = new TextEncoder();
