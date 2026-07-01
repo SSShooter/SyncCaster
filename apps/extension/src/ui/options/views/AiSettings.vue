@@ -107,6 +107,16 @@
               </div>
             </div>
           </n-form-item>
+
+          <n-form-item label="高级调试">
+            <details class="prompt-preview-panel" :class="isDark ? 'bg-gray-900/70' : 'bg-gray-50'">
+              <summary :class="isDark ? 'text-gray-200' : 'text-gray-700'">查看最终提示词预览</summary>
+              <div class="prompt-preview-help" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+                这里只读展示后台固定规则、当前模板和示例文章占位的拼接结果；正式生成时会替换为当前文章全文。
+              </div>
+              <pre class="prompt-preview-body" :class="isDark ? 'bg-gray-950 text-gray-200' : 'bg-white text-gray-700'">{{ finalPromptPreview }}</pre>
+            </details>
+          </n-form-item>
         </div>
 
         <div class="settings-note" :class="isDark ? 'bg-gray-900/70 text-gray-400' : 'bg-gray-50 text-gray-500'">
@@ -127,6 +137,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import { buildRewritePromptPreview, type AiHumanizeLevel, type AiRewritePromptTemplate } from '@synccaster/ai';
 import { useMessage } from 'naive-ui';
 import { aiClient } from '../ai/client';
 import { requireAiHostPermission } from '../ai/host-permissions';
@@ -138,7 +149,22 @@ const saving = ref(false);
 const testing = ref(false);
 const hasApiKey = ref(false);
 
-const form = reactive({
+type CandidateCount = 1 | 2 | 3;
+
+interface AiSettingsForm {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  temperature: number;
+  timeoutMs: number;
+  candidateCount: CandidateCount;
+  humanizeLevel: AiHumanizeLevel;
+  rewritePrompts: AiRewritePromptTemplate[];
+  defaultRewritePromptId: string;
+}
+
+const form = reactive<AiSettingsForm>({
   enabled: false,
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
@@ -175,6 +201,28 @@ const timeoutSeconds = computed({
 const rewritePromptOptionsKey = computed(() => form.rewritePrompts.map((item) => `${item.id}:${item.name}`).join('|'));
 const selectedPrompt = computed(() => form.rewritePrompts.find((item) => item.id === selectedPromptId.value));
 const isDark = computed(() => Boolean(props.isDark));
+const finalPromptPreview = computed(() => buildRewritePromptPreview({
+  source: {
+    postId: 'preview',
+    title: '示例文章标题（生成时替换为当前文章标题）',
+    bodyMd: [
+      '这里是示例正文占位。',
+      '正式生成时会替换为当前文章全文、来源链接和 Markdown 内容。',
+    ].join('\n\n'),
+    sourceUrl: 'https://example.com/source',
+  },
+  rewritePrompt: selectedPrompt.value || form.rewritePrompts[0],
+  humanizeLevel: normalizeHumanizeLevel(form.humanizeLevel),
+  candidateCount: normalizeCandidateCount(form.candidateCount),
+}));
+
+function normalizeCandidateCount(value: unknown): CandidateCount {
+  return value === 1 || value === 2 || value === 3 ? value : 2;
+}
+
+function normalizeHumanizeLevel(value: unknown): AiHumanizeLevel {
+  return value === 'light' || value === 'standard' || value === 'strong' ? value : 'standard';
+}
 
 async function loadConfig() {
   try {
@@ -338,6 +386,38 @@ onMounted(loadConfig);
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.prompt-preview-panel {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+
+.prompt-preview-panel summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  user-select: none;
+}
+
+.prompt-preview-help {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.prompt-preview-body {
+  max-height: 360px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }
 
 .settings-note {

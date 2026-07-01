@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRewriteMessages } from '../prompts';
+import { buildRewriteMessages, buildRewritePromptPreview } from '../prompts';
 
 describe('buildRewriteMessages', () => {
   it('requests JSON with the configured candidate count and source content', () => {
@@ -81,5 +81,31 @@ describe('buildRewriteMessages', () => {
     expect(content).toContain('Segment 2 of 3');
     expect(content).toContain('Rewrite only this segment');
     expect(content).toContain('Do not add a full-article introduction or conclusion');
+  });
+
+  it('formats the full readonly prompt preview from the final messages', () => {
+    const preview = buildRewritePromptPreview({
+      source: {
+        postId: 'preview',
+        title: '示例标题',
+        bodyMd: '示例正文',
+        sourceUrl: 'https://example.com/source',
+      },
+      rewritePrompt: {
+        id: 'wechat',
+        name: '公众号',
+        prompt: '面向公众号读者重写，开头更自然。',
+      },
+      humanizeLevel: 'strong',
+      candidateCount: 2,
+    });
+
+    expect(preview).toContain('### system');
+    expect(preview).toContain('You are an editorial rewriting assistant.');
+    expect(preview).toContain('### user');
+    expect(preview).toContain('Rewrite template: 公众号');
+    expect(preview).toContain('Humanize level: strong');
+    expect(preview).toContain('Return exactly 2 candidates.');
+    expect(preview).toContain('Original Markdown:');
   });
 });

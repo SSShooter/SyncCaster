@@ -118,3 +118,9 @@ export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[]
     },
   ];
 }
+
+export function buildRewritePromptPreview(input: AiRewritePromptInput): string {
+  return buildRewriteMessages(input)
+    .map((message) => `### ${message.role}\n\n${message.content}`)
+    .join('\n\n---\n\n');
+}
