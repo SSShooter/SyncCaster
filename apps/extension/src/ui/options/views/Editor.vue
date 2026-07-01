@@ -197,6 +197,8 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useMessage } from 'naive-ui';
 import { db, type Account, ChromeStorageBridge, type SyncCasterArticle, AccountStatus } from '@synccaster/core';
 import { renderMarkdownPreview, processMermaidInContainer } from '../utils/markdown-preview';
+import { aiClient } from '../ai/client';
+import { getPostEditHash } from '../ai/post-routing';
 import { 
   hasImageInClipboard, 
   handleImagePaste, 
@@ -878,7 +880,18 @@ function showValidationError(msg: string) {
   setTimeout(() => { showValidationTip.value = false; }, 1500);
 }
 
-async function save() {
+async function getHashAfterCreate(post: any) {
+  try {
+    const response = await aiClient.getConfig();
+    return getPostEditHash(response.config, post);
+  } catch (error) {
+    console.warn('Failed to load AI config after creating post:', error);
+    return `editor/${post.id}`;
+  }
+}
+
+async function save(options: { routeAfterCreate?: boolean } = {}) {
+  const routeAfterCreate = options.routeAfterCreate ?? true;
   if (!title.value.trim()) { showValidationError('请输入文章标题'); return false; }
   if (!body.value.trim()) { showValidationError('请输入文章正文'); return false; }
   
@@ -899,12 +912,17 @@ async function save() {
   if (!id.value || id.value === 'new') {
     const now = Date.now();
     const newId = crypto.randomUUID?.() || `${now}-${Math.random().toString(36).slice(2, 8)}`;
-    await db.posts.add({ id: newId, version: 1, title: title.value, summary: body.value.slice(0, 200), canonicalUrl: '', createdAt: now, updatedAt: now, body_md: body.value, tags: [], categories: [], assets: allAssets, meta: {} } as any);
+    const post = { id: newId, version: 1, title: title.value, summary: body.value.slice(0, 200), canonicalUrl: '', createdAt: now, updatedAt: now, body_md: body.value, tags: [], categories: [], assets: allAssets, meta: {} };
+    await db.posts.add(post as any);
     // 更新当前文章 ID，避免重复创建
     id.value = newId;
-    window.location.hash = `editor/${newId}`;
     savedTitle.value = title.value;
     savedBody.value = body.value;
+    if (routeAfterCreate) {
+      window.location.hash = await getHashAfterCreate(post);
+    } else {
+      window.location.hash = `editor/${newId}`;
+    }
     showCopySuccess('文章已保存');
     return true;
   }
@@ -1006,7 +1024,7 @@ function toggleSelectAll() {
 }
 
 async function publish() {
-  if (!id.value || id.value === 'new') { await save(); if (!id.value || id.value === 'new') return; }
+  if (!id.value || id.value === 'new') { await save({ routeAfterCreate: false }); if (!id.value || id.value === 'new') return; }
   
   // 检查是否有未保存的修改
   if (hasUnsavedChanges.value) {
@@ -1024,7 +1042,7 @@ function closePublishDialog() { showPublishDialog.value = false; selectedAccount
 function goToAccounts() { window.location.hash = 'accounts'; }
 
 async function openMdEditor() {
-  if (!id.value || id.value === 'new') { await save(); if (!id.value || id.value === 'new') { alert('请先保存文章'); return; } }
+  if (!id.value || id.value === 'new') { await save({ routeAfterCreate: false }); if (!id.value || id.value === 'new') { alert('请先保存文章'); return; } }
   try {
     await ChromeStorageBridge.saveArticle({ id: id.value, title: title.value || '未命名标题', content: body.value || '', sourceUrl: sourceUrl.value || undefined, updatedAt: Date.now() });
     chrome.tabs.create({ url: chrome.runtime.getURL('md-editor/md-editor.html') });

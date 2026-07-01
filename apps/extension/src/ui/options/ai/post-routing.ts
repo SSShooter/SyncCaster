@@ -6,8 +6,15 @@ export function isCollectedPost(post: any): boolean {
   return typeof sourceUrl === 'string' && sourceUrl.trim().length > 0;
 }
 
+export function isAiRewriteEligiblePost(post: any): boolean {
+  if (post?.meta?.importedFrom) {
+    return false;
+  }
+  return typeof post?.id === 'string' && post.id.trim().length > 0;
+}
+
 export function shouldOpenAiRewrite(config: { enabled?: boolean }, post: any): boolean {
-  return Boolean(config?.enabled) && isCollectedPost(post);
+  return Boolean(config?.enabled) && isAiRewriteEligiblePost(post);
 }
 
 export function getPostEditHash(config: { enabled?: boolean }, post: any): string {
