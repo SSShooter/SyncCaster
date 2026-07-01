@@ -29,6 +29,9 @@ describe('buildRewriteMessages', () => {
     expect(messages[1].content).toContain('valid JSON');
     expect(messages[1].content).toContain('Preserve all numbers, dates, names, links, code blocks, and concrete claims');
     expect(messages[1].content).toContain('Do not summarize the article into a short abstract');
+    expect(messages[1].content).toContain('The rewrite prompt controls style and structure only');
+    expect(messages[1].content).toContain('Do not add new frameworks, tools, code examples, configuration snippets');
+    expect(messages[1].content).toContain('Preserve uncertainty and scope qualifiers');
   });
 
   it('can request a single candidate', () => {
