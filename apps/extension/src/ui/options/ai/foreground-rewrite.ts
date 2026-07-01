@@ -6,6 +6,7 @@ import {
   type AiRewriteCandidate,
   type AiRewritePromptTemplate,
   type AiRewriteSource,
+  type AiSegmentProgressHandler,
 } from '@synccaster/ai';
 
 export interface ForegroundRewriteConfig {
@@ -52,6 +53,8 @@ export type ForegroundRewriteEventStage =
   | 'candidate_error'
   | 'stream_chunk'
   | 'stream_fallback'
+  | 'segment_started'
+  | 'segment_finished'
   | 'finished';
 
 export interface ForegroundRewriteEvent {
@@ -74,6 +77,7 @@ export interface GenerateOneCandidateInput {
   signal?: AbortSignal;
   onStreamChunk?: (content: string) => void;
   onStreamFallback?: (message: string) => void;
+  onSegmentProgress?: AiSegmentProgressHandler;
 }
 
 export type GenerateOneCandidate = (input: GenerateOneCandidateInput) => Promise<{
@@ -131,6 +135,7 @@ async function defaultGenerateOneCandidate(input: GenerateOneCandidateInput) {
     signal: input.signal,
     onStreamChunk: input.onStreamChunk,
     onStreamFallback: input.onStreamFallback,
+    onSegmentProgress: input.onSegmentProgress,
   });
 }
 
@@ -189,6 +194,10 @@ export async function runForegroundRewriteCandidates(input: RunForegroundRewrite
           ? undefined
           : (content) => emit('stream_chunk', { candidateIndex: index, message: content }),
         onStreamFallback: (message) => emit('stream_fallback', { candidateIndex: index, message }),
+        onSegmentProgress: (event) => emit(event.stage, {
+          candidateIndex: index,
+          message: `${event.index + 1}/${event.total}`,
+        }),
       });
       emit('response_received', { candidateIndex: index });
       const candidate = result.candidates[0];

@@ -65,10 +65,24 @@ function getRewritePrompt(input: AiRewritePromptInput) {
   return DEFAULT_REWRITE_PROMPT;
 }
 
+function getSegmentInstructions(input: AiRewritePromptInput): string[] {
+  const segment = input.segment;
+  if (!segment || segment.total <= 1) {
+    return [];
+  }
+  return [
+    `Segment ${segment.index + 1} of ${segment.total}.`,
+    'Rewrite only this segment.',
+    'Do not add a full-article introduction or conclusion unless it exists in this segment.',
+    'Keep continuity with neighboring segments, but do not summarize or rewrite other segments.',
+  ];
+}
+
 export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[] {
   const rewritePrompt = getRewritePrompt(input);
   const humanizeLevel = normalizeHumanizeLevel(input.humanizeLevel);
   const humanizeRequirement = getHumanizeRequirement(humanizeLevel);
+  const segmentInstructions = getSegmentInstructions(input);
   return [
     {
       role: 'system',
@@ -87,6 +101,7 @@ export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[]
         `Humanize level: ${humanizeLevel}`,
         'Rewrite prompt:',
         rewritePrompt.prompt,
+        ...segmentInstructions,
         `Return exactly ${input.candidateCount} candidates.`,
         'Keep each candidate close to the original length unless clarity requires a small change.',
         'Each candidate must apply both the rewrite prompt and the AI-flavor removal requirements.',

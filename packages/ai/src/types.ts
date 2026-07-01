@@ -2,6 +2,12 @@ export type AiRewriteStyle = 'balanced' | 'less_ai' | 'platform_ready';
 export type AiHumanizeLevel = 'light' | 'standard' | 'strong';
 export type AiStreamChunkHandler = (content: string) => void;
 export type AiStreamFallbackHandler = (message: string) => void;
+export type AiSegmentProgressStage = 'segment_started' | 'segment_finished';
+export type AiSegmentProgressHandler = (event: {
+  stage: AiSegmentProgressStage;
+  index: number;
+  total: number;
+}) => void;
 
 export interface AiRewritePromptTemplate {
   id: string;
@@ -29,6 +35,10 @@ export interface AiRewritePromptInput {
   style?: AiRewriteStyle;
   rewritePrompt?: AiRewritePromptTemplate;
   humanizeLevel?: AiHumanizeLevel;
+  segment?: {
+    index: number;
+    total: number;
+  };
   candidateCount: 1 | 2 | 3;
 }
 
@@ -37,6 +47,11 @@ export interface AiRewriteRequest extends AiRewritePromptInput {
   signal?: AbortSignal;
   onStreamChunk?: AiStreamChunkHandler;
   onStreamFallback?: AiStreamFallbackHandler;
+  onSegmentProgress?: AiSegmentProgressHandler;
+  segmentation?: {
+    thresholdChars?: number;
+    targetChars?: number;
+  };
 }
 
 export interface AiRewriteCandidate {

@@ -1,6 +1,7 @@
 import { createChatCompletion, createStreamingChatCompletion, type AiFetch } from './openai-compatible';
 import { preCleanAiCliches } from './humanize-rules';
 import { buildRewriteMessages } from './prompts';
+import { mergeSegmentCandidates, splitMarkdownIntoSegments, shouldSegmentMarkdown } from './segmentation';
 import { AiProviderError, type AiRewriteCandidate, type AiRewriteRequest, type AiRewriteResult } from './types';
 
 const STREAMING_FALLBACK_MESSAGE = 'AI provider did not support streaming. Falling back to normal mode.';
@@ -60,20 +61,19 @@ export function parseRewriteCandidates(content: string): AiRewriteCandidate[] {
   });
 }
 
-export async function generateRewriteCandidates(
+async function requestRewriteCandidates(
   request: AiRewriteRequest,
+  source: AiRewriteRequest['source'],
+  candidateCount: 1 | 2 | 3,
   fetchImpl: AiFetch = fetch
 ): Promise<AiRewriteResult> {
-  const source = {
-    ...request.source,
-    bodyMd: safelyPreCleanAiCliches(request.source.bodyMd),
-  };
   const messages = buildRewriteMessages({
       source,
       style: request.style,
       rewritePrompt: request.rewritePrompt,
       humanizeLevel: request.humanizeLevel,
-      candidateCount: request.candidateCount,
+      segment: request.segment,
+      candidateCount,
     });
   let raw: string;
   if (request.onStreamChunk) {
@@ -100,4 +100,70 @@ export async function generateRewriteCandidates(
     raw,
     candidates: parseRewriteCandidates(raw),
   };
+}
+
+async function generateSegmentedRewriteCandidate(
+  request: AiRewriteRequest,
+  source: AiRewriteRequest['source'],
+  fetchImpl: AiFetch
+): Promise<AiRewriteResult> {
+  const segments = splitMarkdownIntoSegments(source.bodyMd, request.segmentation);
+  const rewrittenSegments: AiRewriteCandidate[] = [];
+
+  for (const segment of segments) {
+    request.onSegmentProgress?.({
+      stage: 'segment_started',
+      index: segment.index,
+      total: segment.total,
+    });
+    const result = await requestRewriteCandidates(
+      {
+        ...request,
+        segment: {
+          index: segment.index,
+          total: segment.total,
+        },
+      },
+      {
+        ...source,
+        bodyMd: segment.bodyMd,
+      },
+      1,
+      fetchImpl
+    );
+    const candidate = result.candidates[0];
+    if (!candidate) {
+      throw new AiProviderError('invalid_response', 'AI provider returned no segment candidate.');
+    }
+    rewrittenSegments.push(candidate);
+    request.onSegmentProgress?.({
+      stage: 'segment_finished',
+      index: segment.index,
+      total: segment.total,
+    });
+  }
+
+  const merged = mergeSegmentCandidates({
+    title: source.title,
+    style: request.style || 'balanced',
+    segments: rewrittenSegments,
+  });
+  return {
+    raw: JSON.stringify({ candidates: [merged] }),
+    candidates: [merged],
+  };
+}
+
+export async function generateRewriteCandidates(
+  request: AiRewriteRequest,
+  fetchImpl: AiFetch = fetch
+): Promise<AiRewriteResult> {
+  const source = {
+    ...request.source,
+    bodyMd: safelyPreCleanAiCliches(request.source.bodyMd),
+  };
+  if (request.candidateCount === 1 && shouldSegmentMarkdown(source.bodyMd, request.segmentation)) {
+    return generateSegmentedRewriteCandidate(request, source, fetchImpl);
+  }
+  return requestRewriteCandidates(request, source, request.candidateCount, fetchImpl);
 }

@@ -235,4 +235,117 @@ describe('generateRewriteCandidates', () => {
     expect(onStreamFallback).toHaveBeenCalledWith('AI provider did not support streaming. Falling back to normal mode.');
     expect(result.candidates[0]).toMatchObject({ title: 'Fallback', bodyMd: 'Body' });
   });
+
+  it('rewrites long markdown in segments and merges the segment candidates', async () => {
+    const bodies = ['第一段改写', '第二段改写', '第三段改写'];
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      const callIndex = fetchImpl.mock.calls.length - 1;
+      const body = JSON.parse(String(init?.body));
+      expect(JSON.stringify(body.messages)).toContain(`Segment ${callIndex + 1} of 3`);
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  candidates: [{
+                    title: callIndex === 0 ? '分段标题' : `段落 ${callIndex + 1}`,
+                    bodyMd: bodies[callIndex],
+                    style: 'balanced',
+                  }],
+                }),
+              },
+            },
+          ],
+        }),
+      });
+    });
+
+    const result = await generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: [
+            '第一段内容'.repeat(20),
+            '',
+            '第二段内容'.repeat(20),
+            '',
+            '第三段内容'.repeat(20),
+          ].join('\n'),
+        },
+        candidateCount: 1,
+        segmentation: {
+          thresholdChars: 100,
+          targetChars: 90,
+        },
+      },
+      fetchImpl as any
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      title: '分段标题',
+      bodyMd: bodies.join('\n\n'),
+      style: 'balanced',
+    });
+  });
+
+  it('reports segment progress while rewriting long markdown', async () => {
+    const progress: string[] = [];
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: '{"candidates":[{"title":"Segment","bodyMd":"Body","style":"balanced"}]}',
+            },
+          },
+        ],
+      }),
+    });
+
+    await generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: [
+            '第一段内容'.repeat(20),
+            '',
+            '第二段内容'.repeat(20),
+          ].join('\n'),
+        },
+        candidateCount: 1,
+        segmentation: {
+          thresholdChars: 100,
+          targetChars: 90,
+        },
+        onSegmentProgress: (event) => progress.push(`${event.stage}:${event.index + 1}/${event.total}`),
+      },
+      fetchImpl as any
+    );
+
+    expect(progress).toEqual([
+      'segment_started:1/2',
+      'segment_finished:1/2',
+      'segment_started:2/2',
+      'segment_finished:2/2',
+    ]);
+  });
 });

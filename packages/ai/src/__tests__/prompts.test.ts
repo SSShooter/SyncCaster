@@ -64,4 +64,20 @@ describe('buildRewriteMessages', () => {
     expect(content).toContain('Humanize level: strong');
     expect(content).toContain('more aggressive');
   });
+
+  it('adds segment-only instructions when segment metadata is provided', () => {
+    const messages = buildRewriteMessages({
+      source: { postId: 'p1', title: '标题', bodyMd: '第二段正文' },
+      candidateCount: 1,
+      segment: {
+        index: 1,
+        total: 3,
+      },
+    });
+
+    const content = messages.map((item) => item.content).join('\n');
+    expect(content).toContain('Segment 2 of 3');
+    expect(content).toContain('Rewrite only this segment');
+    expect(content).toContain('Do not add a full-article introduction or conclusion');
+  });
 });

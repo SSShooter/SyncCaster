@@ -171,6 +171,39 @@ describe('runForegroundRewriteCandidates', () => {
     }));
   });
 
+  it('emits segment progress events for long article generation', async () => {
+    const onEvent = vi.fn();
+    const generateOneCandidate = vi.fn(async (input) => {
+      input.onSegmentProgress?.({ stage: 'segment_started', index: 0, total: 2 });
+      input.onSegmentProgress?.({ stage: 'segment_finished', index: 0, total: 2 });
+      return {
+        raw: '{"candidates":[{"title":"One","bodyMd":"Body one","style":"general"}]}',
+        candidates: [{ id: 'candidate-1', title: 'One', bodyMd: 'Body one', style: 'general' }],
+      };
+    });
+
+    await runForegroundRewriteCandidates({
+      config,
+      apiKey: 'sk-local',
+      source,
+      rewritePromptId: 'general',
+      candidateCount: 1,
+      generateOneCandidate,
+      onEvent,
+    });
+
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'segment_started',
+      candidateIndex: 0,
+      message: '1/2',
+    }));
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'segment_finished',
+      candidateIndex: 0,
+      message: '1/2',
+    }));
+  });
+
   it('returns partial candidates and diagnostics when a later candidate fails', async () => {
     const generateOneCandidate = vi.fn()
       .mockResolvedValueOnce({
