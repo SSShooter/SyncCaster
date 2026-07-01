@@ -124,8 +124,10 @@ import {
   buildRewriteJobDone,
   buildRewriteJobError,
   buildRewriteJobRunning,
+  appendRewriteCandidateToDraft,
   buildRewriteDraft,
   buildSelectedRewriteDraft,
+  createNextRewriteCandidateId,
   getRewriteDraft,
   getRewriteJob,
   getRewriteJobStatusText,
@@ -396,20 +398,20 @@ async function appendCandidateForRequest(candidate: any, requestId: string) {
     return;
   }
   post.value = latestPost;
-  const candidateId = `candidate-${candidates.value.length + 1}`;
+  const candidateId = createNextRewriteCandidateId(candidates.value);
   const normalized = {
     ...candidate,
     id: candidateId,
   };
-  candidates.value = [...candidates.value, normalized];
-  generatedCount.value = candidates.value.length;
-  selectedId.value = selectedId.value || normalized.id;
-  const draft = toCloneable(buildRewriteDraft({
+  const draft = toCloneable(appendRewriteCandidateToDraft(buildRewriteDraft({
     style: selectedPromptId.value,
     candidates: candidates.value,
-    selectedCandidateId: selectedId.value,
+    selectedCandidateId: selectedId.value || normalized.id,
     generatedAt: new Date().toISOString(),
-  }));
+  }), normalized));
+  candidates.value = draft.candidates;
+  generatedCount.value = candidates.value.length;
+  selectedId.value = draft.selectedCandidateId;
   const meta = toCloneable(mergePostMetaWithRewriteDraft(post.value.meta, draft));
   await db.posts.update(post.value.id, { meta } as any);
   post.value = {

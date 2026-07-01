@@ -128,7 +128,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useMessage } from 'naive-ui';
 import { aiClient } from '../ai/client';
-import { requestAiHostPermission } from '../ai/host-permissions';
+import { requireAiHostPermission } from '../ai/host-permissions';
 
 const props = defineProps<{ isDark?: boolean }>();
 
@@ -200,11 +200,7 @@ async function saveConfig() {
     if (!validatePrompts()) {
       return;
     }
-    const granted = await requestAiHostPermission(form.baseUrl);
-    if (!granted) {
-      message.error('未授权 AI 服务域名，无法保存该地址');
-      return;
-    }
+    await requireAiHostPermission(form.baseUrl);
     const response = await aiClient.saveConfig({ ...form });
     hasApiKey.value = Boolean(response.config.hasApiKey);
     form.apiKey = '';
@@ -272,7 +268,7 @@ function validatePrompts() {
 async function testConnection() {
   testing.value = true;
   try {
-    await requestAiHostPermission(form.baseUrl);
+    await requireAiHostPermission(form.baseUrl);
     await aiClient.saveConfig({ ...form });
     await aiClient.testConnection();
     message.success('AI 连接测试成功');

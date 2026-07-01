@@ -17,3 +17,13 @@ export async function requestAiHostPermission(baseUrl: string): Promise<boolean>
   }
   return chrome.permissions.request({ origins: [origin] });
 }
+
+export async function requireAiHostPermission(
+  baseUrl: string,
+  requestPermission: (baseUrl: string) => Promise<boolean> = requestAiHostPermission
+): Promise<void> {
+  const granted = await requestPermission(baseUrl);
+  if (!granted) {
+    throw new Error('AI host permission was not granted.');
+  }
+}

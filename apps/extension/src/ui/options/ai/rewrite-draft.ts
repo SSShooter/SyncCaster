@@ -53,6 +53,31 @@ export function buildSelectedRewriteDraft(input: {
   });
 }
 
+export function appendRewriteCandidateToDraft(
+  draft: RewriteDraft,
+  candidate: RewriteCandidateDraft,
+  maxCandidates = 3
+): RewriteDraft {
+  const candidates = [...draft.candidates, candidate].slice(-maxCandidates);
+  const selectedCandidateId = candidates.some((item) => item.id === draft.selectedCandidateId)
+    ? draft.selectedCandidateId
+    : candidates[0]?.id || '';
+  return {
+    ...draft,
+    candidates,
+    selectedCandidateId,
+  };
+}
+
+export function createNextRewriteCandidateId(candidates: RewriteCandidateDraft[]): string {
+  const maxId = candidates.reduce((max, candidate) => {
+    const match = /^candidate-(\d+)$/.exec(candidate.id);
+    const value = match ? Number(match[1]) : 0;
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 0);
+  return `candidate-${maxId + 1}`;
+}
+
 export function buildRewriteJobRunning(input: {
   requestId: string;
   style: string;

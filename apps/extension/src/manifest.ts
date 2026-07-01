@@ -81,6 +81,7 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
 
     optional_host_permissions: [
       'https://*/*',
+      'http://*/*',
       'http://localhost/*',
       'http://127.0.0.1/*',
     ],

@@ -5,6 +5,8 @@ import {
   buildRewriteJobRunning,
   buildRewriteDraft,
   buildSelectedRewriteDraft,
+  appendRewriteCandidateToDraft,
+  createNextRewriteCandidateId,
   getRewriteDraft,
   getRewriteJob,
   isRewriteJobForRequest,
@@ -78,6 +80,36 @@ describe('rewrite draft persistence', () => {
 
     expect(selectedDraft.candidates).toEqual([candidates[1]]);
     expect(selectedDraft.selectedCandidateId).toBe('candidate-2');
+  });
+
+  it('keeps only the latest three candidates when appending another candidate', () => {
+    const draft = buildRewriteDraft({
+      style: 'less_ai',
+      candidates: [
+        { id: 'candidate-1', title: 'Title 1', bodyMd: 'Body 1' },
+        { id: 'candidate-2', title: 'Title 2', bodyMd: 'Body 2' },
+        { id: 'candidate-3', title: 'Title 3', bodyMd: 'Body 3' },
+      ],
+      selectedCandidateId: 'candidate-1',
+      generatedAt: '2026-06-30T00:00:00.000Z',
+    });
+
+    const next = appendRewriteCandidateToDraft(draft, {
+      id: 'candidate-4',
+      title: 'Title 4',
+      bodyMd: 'Body 4',
+    });
+
+    expect(next.candidates.map((item) => item.id)).toEqual(['candidate-2', 'candidate-3', 'candidate-4']);
+    expect(next.selectedCandidateId).toBe('candidate-2');
+  });
+
+  it('creates the next candidate id from the highest existing numeric suffix', () => {
+    expect(createNextRewriteCandidateId([
+      { id: 'candidate-2', title: 'Title 2', bodyMd: 'Body 2' },
+      { id: 'candidate-3', title: 'Title 3', bodyMd: 'Body 3' },
+      { id: 'candidate-4', title: 'Title 4', bodyMd: 'Body 4' },
+    ])).toBe('candidate-5');
   });
 });
 

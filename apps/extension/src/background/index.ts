@@ -18,6 +18,7 @@ import {
 } from './job-service';
 import { initNativeAgentBridge } from './native-agent-bridge';
 import { handleAiMessage, isAiMessageType } from './ai-service';
+import { sanitizeMessageForLog } from './message-log';
 
 const logger = new Logger('background');
 
@@ -55,7 +56,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 // 监听来自 popup/options/content-script 的消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  logger.debug('message', `Received message: ${message.type}`, { message, sender });
+  logger.debug('message', `Received message: ${message.type}`, { message: sanitizeMessageForLog(message), sender });
   
   handleMessage(message, sender)
     .then(sendResponse)
