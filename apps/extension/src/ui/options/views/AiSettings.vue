@@ -6,111 +6,118 @@
 
     <n-card>
       <n-form label-placement="left" label-width="140px" :model="form">
-        <n-form-item label="开启 AI 改写">
-          <n-switch v-model:value="form.enabled" />
-        </n-form-item>
+        <div class="settings-section">
+          <div class="section-title" :class="isDark ? 'text-gray-100' : 'text-gray-800'">基础配置</div>
+          <n-form-item label="开启 AI 改写">
+            <n-switch v-model:value="form.enabled" />
+          </n-form-item>
 
-        <n-form-item label="API 地址">
-          <n-input v-model:value="form.baseUrl" placeholder="https://api.openai.com/v1" />
-        </n-form-item>
+          <n-form-item label="API 地址">
+            <n-input v-model:value="form.baseUrl" placeholder="https://api.openai.com/v1" />
+          </n-form-item>
 
-        <n-form-item label="API Key">
-          <n-input
-            v-model:value="form.apiKey"
-            type="password"
-            show-password-on="click"
-            :placeholder="hasApiKey ? '已保存，留空则不修改' : '请输入 API Key'"
-          />
-        </n-form-item>
+          <n-form-item label="API Key">
+            <n-input
+              v-model:value="form.apiKey"
+              type="password"
+              show-password-on="click"
+              :placeholder="hasApiKey ? '已保存，留空则不修改' : '请输入 API Key'"
+            />
+          </n-form-item>
 
-        <n-form-item label="模型">
-          <n-input v-model:value="form.model" placeholder="gpt-4o-mini" />
-        </n-form-item>
+          <n-form-item label="模型">
+            <n-input v-model:value="form.model" placeholder="gpt-4o-mini" />
+          </n-form-item>
+        </div>
 
-        <n-form-item label="Temperature">
-          <n-input-number v-model:value="form.temperature" :min="0" :max="2" :step="0.1" />
-        </n-form-item>
+        <div class="settings-section">
+          <div class="section-title" :class="isDark ? 'text-gray-100' : 'text-gray-800'">生成参数</div>
+          <n-form-item label="Temperature">
+            <n-input-number v-model:value="form.temperature" :min="0" :max="2" :step="0.1" />
+          </n-form-item>
 
-        <n-form-item label="请求超时">
-          <n-input-number v-model:value="timeoutSeconds" :min="30" :max="600" :step="30">
-            <template #suffix>秒</template>
-          </n-input-number>
-        </n-form-item>
+          <n-form-item label="请求超时">
+            <n-input-number v-model:value="timeoutSeconds" :min="30" :max="600" :step="30">
+              <template #suffix>秒</template>
+            </n-input-number>
+          </n-form-item>
 
-        <n-form-item label="生成数量">
-          <n-radio-group v-model:value="form.candidateCount">
-            <n-radio-button :value="1">1 个</n-radio-button>
-            <n-radio-button :value="2">2 个</n-radio-button>
-            <n-radio-button :value="3">3 个</n-radio-button>
-          </n-radio-group>
-        </n-form-item>
+          <n-form-item label="生成数量">
+            <n-radio-group v-model:value="form.candidateCount">
+              <n-radio-button :value="1">1 个</n-radio-button>
+              <n-radio-button :value="2">2 个</n-radio-button>
+              <n-radio-button :value="3">3 个</n-radio-button>
+            </n-radio-group>
+          </n-form-item>
 
-        <n-form-item label="去 AI 味强度">
-          <n-radio-group v-model:value="form.humanizeLevel">
-            <n-radio-button value="light">轻度</n-radio-button>
-            <n-radio-button value="standard">标准</n-radio-button>
-            <n-radio-button value="strong">强力</n-radio-button>
-          </n-radio-group>
-        </n-form-item>
+          <n-form-item label="去 AI 味强度">
+            <n-radio-group v-model:value="form.humanizeLevel">
+              <n-radio-button value="light">轻度</n-radio-button>
+              <n-radio-button value="standard">标准</n-radio-button>
+              <n-radio-button value="strong">强力</n-radio-button>
+            </n-radio-group>
+          </n-form-item>
+        </div>
 
-        <n-form-item label="默认提示词">
-          <n-select
-            :key="rewritePromptOptionsKey"
-            v-model:value="form.defaultRewritePromptId"
-            :options="rewritePromptOptions"
-          />
-        </n-form-item>
+        <div class="settings-section">
+          <div class="section-title" :class="isDark ? 'text-gray-100' : 'text-gray-800'">提示词模板</div>
+          <n-form-item label="默认提示词">
+            <n-select
+              :key="rewritePromptOptionsKey"
+              v-model:value="form.defaultRewritePromptId"
+              :options="rewritePromptOptions"
+            />
+          </n-form-item>
 
-        <n-form-item label="改写提示词模板">
-          <div class="prompt-manager">
-            <div class="prompt-toolbar">
-              <n-select
-                :key="rewritePromptOptionsKey"
-                v-model:value="selectedPromptId"
-                :options="rewritePromptOptions"
-                class="prompt-select"
-              />
-              <n-button size="small" @click="addPrompt">新增</n-button>
-              <n-button size="small" :disabled="form.rewritePrompts.length <= 1" @click="removePrompt">删除</n-button>
-            </div>
+          <n-form-item label="改写提示词模板">
+            <div class="prompt-manager">
+              <div class="prompt-toolbar">
+                <n-select
+                  :key="rewritePromptOptionsKey"
+                  v-model:value="selectedPromptId"
+                  :options="rewritePromptOptions"
+                  class="prompt-select"
+                />
+                <n-button size="small" secondary @click="addPrompt">新增</n-button>
+                <n-button size="small" secondary :disabled="form.rewritePrompts.length <= 1" @click="removePrompt">删除</n-button>
+              </div>
 
-            <div v-if="selectedPrompt" class="prompt-editor">
-              <n-input :value="selectedPrompt.name" placeholder="模板名称" @update:value="updateSelectedPromptName" />
-              <n-input
-                :value="selectedPrompt.prompt"
-                type="textarea"
-                placeholder="输入改写方向，例如：改成更适合公众号发布的口吻，保留事实和结构。"
-                :autosize="{ minRows: 5, maxRows: 10 }"
-                @update:value="updateSelectedPromptContent"
-              />
-              <div class="prompt-actions">
-                <n-button
-                  size="small"
-                  :disabled="form.defaultRewritePromptId === selectedPrompt.id"
-                  @click="form.defaultRewritePromptId = selectedPrompt.id"
-                >
-                  设为默认
-                </n-button>
-                <n-button size="small" type="primary" :loading="saving" @click="saveConfig">
-                  保存设置
-                </n-button>
-                <span class="text-xs" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
-                  去 AI 味要求会固定叠加，无需写进每个模板。
-                </span>
+              <div v-if="selectedPrompt" class="prompt-editor">
+                <n-input :value="selectedPrompt.name" placeholder="模板名称" @update:value="updateSelectedPromptName" />
+                <n-input
+                  :value="selectedPrompt.prompt"
+                  type="textarea"
+                  placeholder="输入改写方向，例如：改成更适合公众号发布的口吻，保留事实和结构。"
+                  :autosize="{ minRows: 5, maxRows: 10 }"
+                  @update:value="updateSelectedPromptContent"
+                />
+                <div class="prompt-actions">
+                  <n-button
+                    size="small"
+                    secondary
+                    :disabled="form.defaultRewritePromptId === selectedPrompt.id"
+                    @click="form.defaultRewritePromptId = selectedPrompt.id"
+                  >
+                    设为默认
+                  </n-button>
+                  <span class="text-xs" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+                    去 AI 味要求会固定叠加，无需写进每个模板。
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
-        </n-form-item>
+          </n-form-item>
+        </div>
 
-        <div class="text-sm mb-4" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+        <div class="settings-note" :class="isDark ? 'bg-gray-900/70 text-gray-400' : 'bg-gray-50 text-gray-500'">
           <div>API Key 仅保存在本机扩展存储中。</div>
           <div>生成文案时会把 API Key 发送到你配置的 AI 服务地址。</div>
         </div>
 
-        <div class="flex gap-2">
-          <n-button type="primary" :loading="saving" @click="saveConfig">保存</n-button>
-          <n-button :loading="testing" @click="testConnection">测试连接</n-button>
-          <n-button :disabled="!hasApiKey" @click="clearApiKey">清除 Key</n-button>
+        <div class="settings-actions">
+          <n-button type="primary" :loading="saving" @click="saveConfig">保存设置</n-button>
+          <n-button secondary :loading="testing" @click="testConnection">测试连接</n-button>
+          <n-button secondary :disabled="!hasApiKey" @click="clearApiKey">清除 Key</n-button>
         </div>
       </n-form>
     </n-card>
@@ -123,7 +130,7 @@ import { useMessage } from 'naive-ui';
 import { aiClient } from '../ai/client';
 import { requestAiHostPermission } from '../ai/host-permissions';
 
-defineProps<{ isDark?: boolean }>();
+const props = defineProps<{ isDark?: boolean }>();
 
 const message = useMessage();
 const saving = ref(false);
@@ -166,6 +173,7 @@ const timeoutSeconds = computed({
 });
 const rewritePromptOptionsKey = computed(() => form.rewritePrompts.map((item) => `${item.id}:${item.name}`).join('|'));
 const selectedPrompt = computed(() => form.rewritePrompts.find((item) => item.id === selectedPromptId.value));
+const isDark = computed(() => Boolean(props.isDark));
 
 async function loadConfig() {
   try {
@@ -290,6 +298,22 @@ onMounted(loadConfig);
 </script>
 
 <style scoped>
+.settings-section {
+  padding-bottom: 14px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.settings-section:last-of-type {
+  border-bottom: 0;
+}
+
+.section-title {
+  margin-bottom: 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
 .prompt-manager {
   width: 100%;
 }
@@ -317,5 +341,19 @@ onMounted(loadConfig);
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.settings-note {
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
 }
 </style>

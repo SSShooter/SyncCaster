@@ -2,7 +2,7 @@
   <div>
     <div class="flex-between mb-6">
       <h2 class="text-2xl font-bold" :class="isDark ? 'text-gray-100' : 'text-gray-800'">AI 文案生成</h2>
-      <n-button @click="skipAi">跳过 AI，直接编辑</n-button>
+      <n-button secondary @click="skipAi">跳过 AI，直接编辑</n-button>
     </div>
 
     <div v-if="loading" class="text-center py-8">
@@ -11,16 +11,17 @@
 
     <div v-else-if="post" class="space-y-3">
       <n-card>
-        <div class="flex items-start justify-between gap-4">
+        <div class="article-summary">
           <div class="min-w-0">
             <div class="font-medium truncate" :class="isDark ? 'text-gray-100' : 'text-gray-800'">
               {{ post.title || '未命名文章' }}
             </div>
-            <div class="text-sm truncate mt-1" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
-              {{ sourceUrl || '无来源链接' }}
+            <div class="article-meta mt-1" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+              <span class="truncate">{{ sourceUrl || '无来源链接' }}</span>
+              <span>{{ countWords(post.body_md || '') }} 字</span>
             </div>
           </div>
-          <n-button size="small" @click="expanded = !expanded">
+          <n-button size="small" secondary @click="expanded = !expanded">
             {{ expanded ? '收起原文' : '查看原文' }}
           </n-button>
         </div>
@@ -31,29 +32,26 @@
       </n-card>
 
       <n-card>
-        <div class="flex items-center gap-3 flex-wrap">
+        <div class="generation-toolbar">
           <n-select v-model:value="selectedPromptId" :options="rewritePromptOptions" style="width: 220px" />
           <n-button type="primary" :loading="generating" @click="generate">
             {{ candidates.length > 0 ? '重新生成' : '生成文案' }}
           </n-button>
-          <n-button :disabled="generating || candidates.length === 0" @click="generateOneMore">
+          <n-button secondary :disabled="generating || candidates.length === 0" @click="generateOneMore">
             再生成一个
           </n-button>
-          <n-button v-if="generating" @click="cancelGenerate">
+          <n-button v-if="generating" secondary @click="cancelGenerate">
             取消生成
           </n-button>
-          <n-button :disabled="!selectedCandidate" :loading="saving" @click="useSelected">
+          <n-button type="success" secondary :disabled="!selectedCandidate" :loading="saving" @click="useSelected">
             使用选中文案
           </n-button>
         </div>
-        <div v-if="generationProgressText" class="text-xs mt-3" :class="isDark ? 'text-blue-300' : 'text-blue-600'">
-          {{ generationProgressText }}
-        </div>
-        <div class="text-xs mt-2" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
-          {{ generationModeText }}
-        </div>
-        <div v-if="generationStageText" class="text-xs mt-2" :class="isDark ? 'text-gray-300' : 'text-gray-600'">
-          {{ generationStageText }}
+
+        <div class="status-strip mt-3" :class="isDark ? 'bg-gray-900/70 text-gray-300' : 'bg-gray-50 text-gray-600'">
+          <span v-if="generationProgressText">{{ generationProgressText }}</span>
+          <span v-if="generationStageText">{{ generationStageText }}</span>
+          <span>{{ generationModeText }}</span>
         </div>
         <div
           v-if="streamingPreview"
@@ -63,10 +61,8 @@
           <div class="text-xs mb-2" :class="isDark ? 'text-gray-400' : 'text-gray-500'">实时返回预览</div>
           <pre>{{ streamingPreview }}</pre>
         </div>
-        <div v-if="jobStatusText" class="text-xs mt-3" :class="jobStatusClass">
-          {{ jobStatusText }}
-        </div>
-        <div v-if="generationErrors.length > 0" class="text-xs mt-2 text-red-500">
+        <div v-if="jobStatusText" class="text-xs mt-3" :class="jobStatusClass">{{ jobStatusText }}</div>
+        <div v-if="generationErrors.length > 0" class="error-list mt-2">
           <div v-for="error in generationErrors" :key="`${error.candidateIndex}-${error.message}`">
             候选 {{ error.candidateIndex + 1 }}：{{ error.message }}
           </div>
@@ -75,30 +71,31 @@
 
       <div v-if="candidates.length > 0" class="candidate-grid">
         <n-card
-          v-for="candidate in candidates"
+          v-for="(candidate, index) in candidates"
           :key="candidate.id"
           class="candidate-card"
           :class="selectedId === candidate.id ? 'candidate-selected' : ''"
           @click="selectedId = candidate.id"
         >
-          <div class="flex items-start gap-3">
-            <n-radio :checked="selectedId === candidate.id" @update:checked="selectedId = candidate.id" />
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center justify-between gap-3">
+          <div class="candidate-inner">
+            <div class="candidate-head">
+              <div class="flex items-center gap-2 min-w-0">
+                <n-radio :checked="selectedId === candidate.id" @update:checked="selectedId = candidate.id" />
+                <n-tag size="small" :type="selectedId === candidate.id ? 'primary' : 'default'">
+                  候选 {{ index + 1 }}
+                </n-tag>
                 <div class="font-medium truncate" :class="isDark ? 'text-gray-100' : 'text-gray-800'">
                   {{ candidate.title }}
                 </div>
-                <n-tag size="small">{{ countWords(candidate.bodyMd) }} 字</n-tag>
               </div>
-              <pre
-                class="candidate-body mt-3 text-sm"
-                :class="isDark ? 'bg-gray-900/70 text-gray-200' : 'bg-gray-50 text-gray-700'"
-              >
-                {{ candidate.bodyMd }}
-              </pre>
-              <div v-if="candidate.rationale" class="text-xs mt-3" :class="isDark ? 'text-blue-300' : 'text-blue-600'">
-                {{ candidate.rationale }}
-              </div>
+              <n-tag size="small">{{ countWords(candidate.bodyMd) }} 字</n-tag>
+            </div>
+            <pre
+              class="candidate-body mt-3 text-sm"
+              :class="isDark ? 'bg-gray-900/70 text-gray-200' : 'bg-gray-50 text-gray-700'"
+            >{{ candidate.bodyMd }}</pre>
+            <div v-if="candidate.rationale" class="text-xs mt-3" :class="isDark ? 'text-blue-300' : 'text-blue-600'">
+              {{ candidate.rationale }}
             </div>
           </div>
         </n-card>
@@ -660,6 +657,42 @@ onBeforeUnmount(() => {
   user-select: text;
 }
 
+.article-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.article-meta {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.generation-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.status-strip {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.error-list {
+  color: #ef4444;
+  font-size: 12px;
+}
+
 .candidate-card {
   cursor: pointer;
 }
@@ -672,6 +705,17 @@ onBeforeUnmount(() => {
 
 .candidate-selected {
   outline: 2px solid #3b82f6;
+}
+
+.candidate-inner {
+  min-width: 0;
+}
+
+.candidate-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .candidate-body {
