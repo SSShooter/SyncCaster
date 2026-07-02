@@ -50,6 +50,23 @@
             </n-radio-group>
           </n-form-item>
 
+          <n-form-item label="创作模式">
+            <div class="rewrite-mode-field">
+              <n-radio-group v-model:value="form.rewriteMode">
+                <n-radio-button
+                  v-for="option in rewriteModeOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </n-radio-button>
+              </n-radio-group>
+              <div class="mode-description" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+                {{ selectedRewriteModeDescription }}
+              </div>
+            </div>
+          </n-form-item>
+
           <n-form-item label="去 AI 味强度">
             <n-radio-group v-model:value="form.humanizeLevel">
               <n-radio-button value="light">轻度</n-radio-button>
@@ -137,10 +154,16 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { buildRewritePromptPreview, type AiHumanizeLevel, type AiRewritePromptTemplate } from '@synccaster/ai';
+import { buildRewritePromptPreview, type AiHumanizeLevel, type AiRewriteMode, type AiRewritePromptTemplate } from '@synccaster/ai';
 import { useMessage } from 'naive-ui';
 import { aiClient } from '../ai/client';
 import { requireAiHostPermission } from '../ai/host-permissions';
+import {
+  getDefaultRewriteMode,
+  getRewriteModeOption,
+  normalizeUiRewriteMode,
+  rewriteModeOptions,
+} from '../ai/rewrite-mode';
 
 const props = defineProps<{ isDark?: boolean }>();
 
@@ -159,6 +182,7 @@ interface AiSettingsForm {
   temperature: number;
   timeoutMs: number;
   candidateCount: CandidateCount;
+  rewriteMode: AiRewriteMode;
   humanizeLevel: AiHumanizeLevel;
   rewritePrompts: AiRewritePromptTemplate[];
   defaultRewritePromptId: string;
@@ -172,6 +196,7 @@ const form = reactive<AiSettingsForm>({
   temperature: 0.4,
   timeoutMs: 180000,
   candidateCount: 2,
+  rewriteMode: getDefaultRewriteMode(),
   humanizeLevel: 'standard',
   rewritePrompts: [
     {
@@ -201,6 +226,7 @@ const timeoutSeconds = computed({
 const rewritePromptOptionsKey = computed(() => form.rewritePrompts.map((item) => `${item.id}:${item.name}`).join('|'));
 const selectedPrompt = computed(() => form.rewritePrompts.find((item) => item.id === selectedPromptId.value));
 const isDark = computed(() => Boolean(props.isDark));
+const selectedRewriteModeDescription = computed(() => getRewriteModeOption(form.rewriteMode).description);
 const finalPromptPreview = computed(() => buildRewritePromptPreview({
   source: {
     postId: 'preview',
@@ -212,6 +238,7 @@ const finalPromptPreview = computed(() => buildRewritePromptPreview({
     sourceUrl: 'https://example.com/source',
   },
   rewritePrompt: selectedPrompt.value || form.rewritePrompts[0],
+  rewriteMode: normalizeUiRewriteMode(form.rewriteMode),
   humanizeLevel: normalizeHumanizeLevel(form.humanizeLevel),
   candidateCount: normalizeCandidateCount(form.candidateCount),
 }));
@@ -235,6 +262,7 @@ async function loadConfig() {
         prompt: '在保留事实和观点的前提下，对文章进行重新编排和表达。',
       }];
     }
+    form.rewriteMode = normalizeUiRewriteMode(form.rewriteMode);
     selectedPromptId.value = form.defaultRewritePromptId || form.rewritePrompts[0].id;
     hasApiKey.value = Boolean(response.config.hasApiKey);
     form.apiKey = '';
@@ -361,6 +389,16 @@ onMounted(loadConfig);
 
 .prompt-manager {
   width: 100%;
+}
+
+.rewrite-mode-field {
+  width: 100%;
+}
+
+.mode-description {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .prompt-toolbar {

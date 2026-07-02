@@ -1,3 +1,5 @@
+import type { AiRewriteMode } from '@synccaster/ai';
+
 export interface RewriteCandidateDraft {
   id: string;
   title: string;
@@ -9,6 +11,7 @@ export interface RewriteCandidateDraft {
 
 export interface RewriteDraft {
   style: string;
+  rewriteMode?: AiRewriteMode;
   candidates: RewriteCandidateDraft[];
   selectedCandidateId: string;
   generatedAt: string;
@@ -19,6 +22,7 @@ export type RewriteJobStatus = 'running' | 'done' | 'error';
 export interface RewriteJob {
   requestId: string;
   style: string;
+  rewriteMode?: AiRewriteMode;
   status: RewriteJobStatus;
   startedAt: string;
   finishedAt?: string;
@@ -28,12 +32,14 @@ export interface RewriteJob {
 
 export function buildRewriteDraft(input: {
   style: string;
+  rewriteMode?: AiRewriteMode;
   candidates: RewriteCandidateDraft[];
   selectedCandidateId?: string;
   generatedAt: string;
 }): RewriteDraft {
   return {
     style: input.style,
+    rewriteMode: input.rewriteMode,
     candidates: input.candidates,
     selectedCandidateId: input.selectedCandidateId || input.candidates[0]?.id || '',
     generatedAt: input.generatedAt,
@@ -43,10 +49,12 @@ export function buildRewriteDraft(input: {
 export function buildSelectedRewriteDraft(input: {
   candidate: RewriteCandidateDraft;
   style: string;
+  rewriteMode?: AiRewriteMode;
   generatedAt: string;
 }): RewriteDraft {
   return buildRewriteDraft({
     style: input.style,
+    rewriteMode: input.rewriteMode,
     candidates: [input.candidate],
     selectedCandidateId: input.candidate.id,
     generatedAt: input.generatedAt,
@@ -81,11 +89,13 @@ export function createNextRewriteCandidateId(candidates: RewriteCandidateDraft[]
 export function buildRewriteJobRunning(input: {
   requestId: string;
   style: string;
+  rewriteMode?: AiRewriteMode;
   startedAt: string;
 }): RewriteJob {
   return {
     requestId: input.requestId,
     style: input.style,
+    rewriteMode: input.rewriteMode,
     status: 'running',
     startedAt: input.startedAt,
   };
@@ -94,6 +104,7 @@ export function buildRewriteJobRunning(input: {
 export function buildRewriteJobDone(input: {
   requestId: string;
   style: string;
+  rewriteMode?: AiRewriteMode;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
@@ -101,6 +112,7 @@ export function buildRewriteJobDone(input: {
   return {
     requestId: input.requestId,
     style: input.style,
+    rewriteMode: input.rewriteMode,
     status: 'done',
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
@@ -111,6 +123,7 @@ export function buildRewriteJobDone(input: {
 export function buildRewriteJobError(input: {
   requestId: string;
   style: string;
+  rewriteMode?: AiRewriteMode;
   startedAt: string;
   finishedAt: string;
   errorMessage: string;
@@ -118,6 +131,7 @@ export function buildRewriteJobError(input: {
   return {
     requestId: input.requestId,
     style: input.style,
+    rewriteMode: input.rewriteMode,
     status: 'error',
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,

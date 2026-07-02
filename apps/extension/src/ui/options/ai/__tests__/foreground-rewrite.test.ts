@@ -119,6 +119,32 @@ describe('runForegroundRewriteCandidates', () => {
     }));
   });
 
+  it('passes the selected rewrite mode into candidate generation', async () => {
+    const generateOneCandidate = vi.fn().mockResolvedValue({
+      raw: '{"candidates":[{"title":"One","bodyMd":"Body one","style":"general"}]}',
+      candidates: [{ id: 'candidate-1', title: 'One', bodyMd: 'Body one', style: 'general' }],
+    });
+
+    await runForegroundRewriteCandidates({
+      config: {
+        baseUrl: 'https://api.example.com/v1',
+        model: 'test-model',
+        temperature: 0.4,
+        timeoutMs: 180000,
+        candidateCount: 1,
+        rewriteMode: 'case_study',
+      },
+      apiKey: 'sk-local',
+      source,
+      candidateCount: 1,
+      generateOneCandidate,
+    });
+
+    expect(generateOneCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      rewriteMode: 'case_study',
+    }));
+  });
+
   it('emits stream preview events for the visible UI', async () => {
     const onEvent = vi.fn();
     const generateOneCandidate = vi.fn(async (input) => {

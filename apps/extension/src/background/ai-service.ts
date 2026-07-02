@@ -1,9 +1,12 @@
 import {
+  DEFAULT_REWRITE_MODE,
   DEFAULT_REWRITE_PROMPT,
   generateRewriteCandidates,
   normalizeHumanizeLevel,
+  normalizeRewriteMode,
   testOpenAiConnection,
   type AiHumanizeLevel,
+  type AiRewriteMode,
   type AiRewritePromptTemplate,
   type AiRewriteStyle,
 } from '@synccaster/ai';
@@ -19,6 +22,7 @@ export const DEFAULT_AI_REWRITE_CONFIG = {
   temperature: 0.4,
   timeoutMs: 180_000,
   candidateCount: 2 as 1 | 2 | 3,
+  rewriteMode: DEFAULT_REWRITE_MODE,
   humanizeLevel: 'standard' as AiHumanizeLevel,
   defaultStyle: 'balanced' as AiRewriteStyle,
   rewritePrompts: [DEFAULT_REWRITE_PROMPT] as AiRewritePromptTemplate[],
@@ -77,6 +81,7 @@ function normalizeConfig(input: any) {
     candidateCount: [1, 2, 3].includes(Number(input?.candidateCount))
       ? Number(input.candidateCount) as 1 | 2 | 3
       : DEFAULT_AI_REWRITE_CONFIG.candidateCount,
+    rewriteMode: normalizeRewriteMode(input?.rewriteMode),
     humanizeLevel: normalizeHumanizeLevel(input?.humanizeLevel),
     defaultStyle: ['balanced', 'less_ai', 'platform_ready'].includes(input?.defaultStyle)
       ? input.defaultStyle as AiRewriteStyle
@@ -166,11 +171,13 @@ function createRequestId() {
 function buildRewriteJobRunning(input: {
   requestId: string;
   style: string;
+  rewriteMode?: AiRewriteMode;
   startedAt: string;
 }) {
   return {
     requestId: input.requestId,
     style: input.style,
+    rewriteMode: input.rewriteMode,
     status: 'running',
     startedAt: input.startedAt,
   };
@@ -179,6 +186,7 @@ function buildRewriteJobRunning(input: {
 function buildRewriteJobDone(input: {
   requestId: string;
   style: string;
+  rewriteMode?: AiRewriteMode;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
@@ -186,6 +194,7 @@ function buildRewriteJobDone(input: {
   return {
     requestId: input.requestId,
     style: input.style,
+    rewriteMode: input.rewriteMode,
     status: 'done',
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
@@ -196,6 +205,7 @@ function buildRewriteJobDone(input: {
 function buildRewriteJobError(input: {
   requestId: string;
   style: string;
+  rewriteMode?: AiRewriteMode;
   startedAt: string;
   finishedAt: string;
   errorMessage: string;
@@ -203,6 +213,7 @@ function buildRewriteJobError(input: {
   return {
     requestId: input.requestId,
     style: input.style,
+    rewriteMode: input.rewriteMode,
     status: 'error',
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
@@ -229,6 +240,7 @@ function appendCandidate(candidates: any[], candidate: any, maxCandidates = 3) {
 
 function buildRewriteDraft(input: {
   style: string;
+  rewriteMode?: AiRewriteMode;
   existingDraft?: any;
   candidates: any[];
   append?: boolean;
@@ -249,6 +261,7 @@ function buildRewriteDraft(input: {
     : candidates[0]?.id || '';
   return {
     style: input.style,
+    rewriteMode: input.rewriteMode,
     candidates,
     selectedCandidateId,
     generatedAt: input.generatedAt,
@@ -268,10 +281,12 @@ export async function runAiRewriteJob(input: {
   rewritePromptId?: string;
   candidateCount?: 1 | 2 | 3;
   append?: boolean;
+  rewriteMode?: AiRewriteMode;
 }, deps: AiServiceDeps = createDefaultDeps()) {
   const startedAtMs = deps.now();
   const startedAt = new Date(startedAtMs).toISOString();
   const style = input.rewritePromptId || 'general';
+  let rewriteMode = normalizeRewriteMode(input.rewriteMode);
   const post = await deps.postsTable.get(input.postId);
   if (!post) {
     throw new Error('Post not found.');
@@ -282,12 +297,14 @@ export async function runAiRewriteJob(input: {
     aiRewriteJob: buildRewriteJobRunning({
       requestId: input.requestId,
       style,
+      rewriteMode,
       startedAt,
     }),
   });
 
   try {
     const { settings, provider } = await requireProviderConfig(deps);
+    rewriteMode = normalizeRewriteMode(input.rewriteMode || settings.config.rewriteMode);
     const rewritePrompt = resolveRewritePrompt(settings.config, input.rewritePromptId);
     const result = await deps.generateRewriteCandidates({
       provider,
@@ -298,6 +315,7 @@ export async function runAiRewriteJob(input: {
         sourceUrl: post.meta?.source_url || post.canonicalUrl || post.source_url || '',
       },
       rewritePrompt,
+      rewriteMode,
       style: settings.config.defaultStyle,
       humanizeLevel: settings.config.humanizeLevel,
       candidateCount: input.candidateCount || settings.config.candidateCount,
@@ -313,6 +331,7 @@ export async function runAiRewriteJob(input: {
     const finishedAtMs = deps.now();
     const draft = buildRewriteDraft({
       style,
+      rewriteMode,
       existingDraft: latestPost.meta?.aiRewriteDraft,
       candidates: result.candidates,
       append: input.append,
@@ -324,6 +343,7 @@ export async function runAiRewriteJob(input: {
       aiRewriteJob: buildRewriteJobDone({
         requestId: input.requestId,
         style,
+        rewriteMode,
         startedAt,
         finishedAt: new Date(finishedAtMs).toISOString(),
         durationMs: Math.max(0, finishedAtMs - startedAtMs),
@@ -339,6 +359,7 @@ export async function runAiRewriteJob(input: {
         aiRewriteJob: buildRewriteJobError({
           requestId: input.requestId,
           style,
+          rewriteMode,
           startedAt,
           finishedAt: new Date(finishedAtMs).toISOString(),
           errorMessage: error?.message || 'AI rewrite job failed.',
@@ -354,6 +375,7 @@ export async function startAiRewriteJob(input: {
   rewritePromptId?: string;
   candidateCount?: 1 | 2 | 3;
   append?: boolean;
+  rewriteMode?: AiRewriteMode;
 }, deps: AiServiceDeps = createDefaultDeps()) {
   const requestId = createRequestId();
   void runAiRewriteJob({
@@ -387,6 +409,7 @@ export async function handleAiMessage(message: any, deps: AiServiceDeps = create
           provider,
           source: message.data.source,
           rewritePrompt,
+          rewriteMode: normalizeRewriteMode(message.data.rewriteMode || settings.config.rewriteMode),
           style: message.data.style || settings.config.defaultStyle,
           humanizeLevel: settings.config.humanizeLevel,
           candidateCount: settings.config.candidateCount,

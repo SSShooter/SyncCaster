@@ -113,6 +113,7 @@ async function requestRewriteCandidates(
   const baseMessages = buildRewriteMessages({
       source,
       style: request.style,
+      rewriteMode: request.rewriteMode,
       rewritePrompt: request.rewritePrompt,
       humanizeLevel: request.humanizeLevel,
       segment: request.segment,

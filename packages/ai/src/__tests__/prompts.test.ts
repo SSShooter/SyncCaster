@@ -32,7 +32,7 @@ describe('buildRewriteMessages', () => {
     expect(messages[1].content).toContain('The rewrite prompt controls style and structure only');
     expect(messages[1].content).toContain('Do not add new frameworks, tools, code examples, configuration snippets');
     expect(messages[1].content).toContain('Preserve uncertainty and scope qualifiers');
-    expect(messages[0].content).toContain('Do not preserve the source article heading order');
+    expect(messages[1].content).toContain('Do not preserve the source article heading order');
     expect(messages[0].content).not.toContain('Markdown structure');
     expect(messages[1].content).toContain('single online article as reference material');
     expect(messages[1].content).toContain('Avoid copying any non-technical phrase longer than 20 Chinese characters');
@@ -49,6 +49,40 @@ describe('buildRewriteMessages', () => {
     });
 
     expect(messages[1].content).toContain('Return exactly 1 candidates');
+  });
+
+  it('adds faithful rewrite mode instructions when selected', () => {
+    const messages = buildRewriteMessages({
+      source: {
+        postId: 'post-1',
+        title: 'Original title',
+        bodyMd: 'Original body',
+      },
+      rewriteMode: 'faithful_rewrite',
+      candidateCount: 1,
+    });
+
+    const content = messages.map((item) => item.content).join('\n');
+    expect(content).toContain('Creation mode: faithful_rewrite');
+    expect(content).toContain('preserve the source article structure');
+    expect(content).not.toContain('single online article as reference material');
+  });
+
+  it('adds case study rewrite mode instructions when selected', () => {
+    const messages = buildRewriteMessages({
+      source: {
+        postId: 'post-1',
+        title: 'Original title',
+        bodyMd: 'Original body',
+      },
+      rewriteMode: 'case_study',
+      candidateCount: 1,
+    });
+
+    const content = messages.map((item) => item.content).join('\n');
+    expect(content).toContain('Creation mode: case_study');
+    expect(content).toContain('project case study');
+    expect(content).toContain('Do not invent client names');
   });
 
   it('uses standard humanize instructions by default', () => {

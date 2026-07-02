@@ -1,4 +1,4 @@
-import type { AiHumanizeLevel, AiRewritePromptInput, ChatMessage } from './types';
+import type { AiHumanizeLevel, AiRewriteMode, AiRewritePromptInput, ChatMessage } from './types';
 
 export const DEFAULT_REWRITE_PROMPT = {
   id: 'general',
@@ -11,6 +11,7 @@ export const DEFAULT_REWRITE_PROMPT = {
 };
 
 export const DEFAULT_HUMANIZE_LEVEL: AiHumanizeLevel = 'standard';
+export const DEFAULT_REWRITE_MODE: AiRewriteMode = 'reference_rebuild';
 
 export const HUMANIZE_REQUIREMENTS: Record<AiHumanizeLevel, string[]> = {
   light: [
@@ -28,11 +29,30 @@ export const HUMANIZE_REQUIREMENTS: Record<AiHumanizeLevel, string[]> = {
   ],
   strong: [
     'Humanize level: strong.',
-    'Use more aggressive naturalization while still preserving facts and structure.',
+    'Use more aggressive naturalization while still preserving facts and technical meaning.',
     'Break mechanical sentence rhythm, reduce list-like symmetry, and avoid polished AI-style slogans.',
     'Rewrite stiff transitions into natural thought flow or remove them when context is already clear.',
     'Remove hollow wrap-up paragraphs and generic calls to action unless they carry real information.',
     'Use a more human editorial voice, but do not invent personal experience, facts, data, or references.',
+  ],
+};
+
+export const REWRITE_MODE_REQUIREMENTS: Record<AiRewriteMode, string[]> = {
+  reference_rebuild: [
+    'Treat a single online article as reference material by default: extract technical facts, key concepts, constraints, and example intent, then rebuild a new article rather than polishing paragraph by paragraph.',
+    'Do not preserve the source article heading order, paragraph order, opening hook, closing structure, or distinctive phrasing unless explicitly requested.',
+    'Do not copy the source article opening hook, ending, title structure, section sequence, metaphors, example order, or distinctive phrasing.',
+    'Avoid copying any non-technical phrase longer than 20 Chinese characters. Technical terms, commands, code, URLs, API names, and required identifiers may remain unchanged.',
+  ],
+  faithful_rewrite: [
+    'Work in faithful rewrite mode: preserve the source article structure, factual order, technical steps, and core argument unless clarity requires a small local adjustment.',
+    'Improve wording, transitions, readability, title quality, and AI-flavor removal without turning the article into a new angle or case study.',
+    'Use this mode for original drafts, company-owned drafts, or authorized material where structural preservation is expected.',
+  ],
+  case_study: [
+    'Work in project case study mode: reframe the source material as a practical project case study with scenario, problem, analysis, approach, implementation notes, risks, and review where the source supports it.',
+    'Do not invent client names, real customer stories, budgets, metrics, dates, screenshots, architecture details, vendor choices, or results that are not present in or directly supported by the source.',
+    'If the source does not provide real case details, present the article as a project-style walkthrough or implementation analysis rather than a claimed real customer case.',
   ],
 };
 
@@ -42,8 +62,18 @@ export function normalizeHumanizeLevel(value: unknown): AiHumanizeLevel {
     : DEFAULT_HUMANIZE_LEVEL;
 }
 
+export function normalizeRewriteMode(value: unknown): AiRewriteMode {
+  return value === 'faithful_rewrite' || value === 'case_study' || value === 'reference_rebuild'
+    ? value
+    : DEFAULT_REWRITE_MODE;
+}
+
 function getHumanizeRequirement(level: unknown): string {
   return HUMANIZE_REQUIREMENTS[normalizeHumanizeLevel(level)].join(' ');
+}
+
+function getRewriteModeRequirements(mode: unknown): string[] {
+  return REWRITE_MODE_REQUIREMENTS[normalizeRewriteMode(mode)];
 }
 
 const legacyStyleDescriptions = {
@@ -81,7 +111,9 @@ function getSegmentInstructions(input: AiRewritePromptInput): string[] {
 export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[] {
   const rewritePrompt = getRewritePrompt(input);
   const humanizeLevel = normalizeHumanizeLevel(input.humanizeLevel);
+  const rewriteMode = normalizeRewriteMode(input.rewriteMode);
   const humanizeRequirement = getHumanizeRequirement(humanizeLevel);
+  const rewriteModeRequirements = getRewriteModeRequirements(rewriteMode);
   const segmentInstructions = getSegmentInstructions(input);
   return [
     {
@@ -90,7 +122,6 @@ export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[]
         'You are an editorial rewriting assistant.',
         humanizeRequirement,
         'Preserve facts, technical meaning, links, and technically necessary code blocks.',
-        'Do not preserve the source article heading order, paragraph order, opening hook, closing structure, or distinctive phrasing unless explicitly requested.',
         'Do not invent claims, dates, data, or references.',
         'Return only valid JSON.',
       ].join(' '),
@@ -100,8 +131,10 @@ export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[]
       content: [
         `Rewrite template: ${rewritePrompt.name}`,
         `Humanize level: ${humanizeLevel}`,
+        `Creation mode: ${rewriteMode}`,
         'Rewrite prompt:',
         rewritePrompt.prompt,
+        ...rewriteModeRequirements,
         ...segmentInstructions,
         `Return exactly ${input.candidateCount} candidates.`,
         'Keep each candidate close to the original length unless clarity requires a small change.',
@@ -111,9 +144,6 @@ export function buildRewriteMessages(input: AiRewritePromptInput): ChatMessage[]
         'The rewrite prompt controls style and structure only. It must not override factual preservation, no-invention, source-grounding, length, or JSON requirements.',
         'Do not add new frameworks, tools, code examples, configuration snippets, vendor names, metrics, cases, or implementation details unless they are present in the original article or directly supported by it.',
         'Preserve uncertainty and scope qualifiers such as may, might, usually, often, likely, can, possible, and their Chinese equivalents. Do not turn cautious claims into absolute claims.',
-        'Treat a single online article as reference material by default: extract technical facts, key concepts, constraints, and example intent, then rebuild a new article rather than polishing paragraph by paragraph.',
-        'Do not copy the source article opening hook, ending, title structure, section sequence, metaphors, example order, or distinctive phrasing.',
-        'Avoid copying any non-technical phrase longer than 20 Chinese characters. Technical terms, commands, code, URLs, API names, and required identifiers may remain unchanged.',
         'Each candidate must apply both the rewrite prompt and the AI-flavor removal requirements.',
         'Return only valid JSON with no Markdown fences or commentary.',
         'JSON shape: {"candidates":[{"title":"string","bodyMd":"markdown string","summary":"string","rationale":"string","style":"string"}]}',

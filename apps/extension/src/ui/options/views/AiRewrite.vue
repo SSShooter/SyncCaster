@@ -33,6 +33,7 @@
 
       <n-card>
         <div class="generation-toolbar">
+          <n-select v-model:value="selectedRewriteMode" :options="rewriteModeSelectOptions" style="width: 180px" />
           <n-select v-model:value="selectedPromptId" :options="rewritePromptOptions" style="width: 220px" />
           <n-button type="primary" :loading="generating" @click="generate">
             {{ candidates.length > 0 ? '重新生成' : '生成文案' }}
@@ -109,6 +110,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { db } from '@synccaster/core';
+import type { AiRewriteMode } from '@synccaster/ai';
 import { useMessage } from 'naive-ui';
 import { toCloneable } from '../ai/cloneable';
 import { aiClient } from '../ai/client';
@@ -130,6 +132,12 @@ import {
   mergePostMetaWithRewriteJob,
   type RewriteJob,
 } from '../ai/rewrite-draft';
+import {
+  getDefaultRewriteMode,
+  getRewriteModeOption,
+  normalizeUiRewriteMode,
+  rewriteModeOptions,
+} from '../ai/rewrite-mode';
 
 const props = defineProps<{ isDark?: boolean }>();
 
@@ -142,6 +150,7 @@ const candidates = ref<any[]>([]);
 const selectedId = ref('');
 const rewritePrompts = ref<any[]>([]);
 const selectedPromptId = ref('general');
+const selectedRewriteMode = ref<AiRewriteMode>(getDefaultRewriteMode());
 const expanded = ref(false);
 const rewriteJob = ref<RewriteJob | null>(null);
 const generationErrors = ref<ForegroundRewriteError[]>([]);
@@ -171,7 +180,14 @@ const rewritePromptOptions = computed(() => rewritePrompts.value.map((item) => (
   label: item.name || '未命名模板',
   value: item.id,
 })));
-const generationModeText = computed(() => `后台生成模式 / 单次最多等待 ${Math.round(activeTimeoutMs.value / 1000)} 秒，可离开页面后再回来查看结果`);
+const rewriteModeSelectOptions = computed(() => rewriteModeOptions.map((item) => ({
+  label: item.label,
+  value: item.value,
+})));
+const generationModeText = computed(() => {
+  const modeLabel = getRewriteModeOption(selectedRewriteMode.value).label;
+  return `创作模式：${modeLabel} / 后台生成 / 单次最多等待 ${Math.round(activeTimeoutMs.value / 1000)} 秒，可离开页面后再回来查看结果`;
+});
 const generationProgressText = computed(() => {
   if (generating.value && requestedCount.value > 0) {
     return `正在逐个生成候选：${generatedCount.value}/${requestedCount.value}`;
@@ -278,6 +294,7 @@ async function loadPost() {
     selectedPromptId.value = rewritePrompts.value.some((item) => item.id === storedPromptId)
       ? storedPromptId
       : rewritePrompts.value[0].id;
+    selectedRewriteMode.value = normalizeUiRewriteMode(draft?.rewriteMode || configResponse.config.rewriteMode);
     if (draft) {
       candidates.value = draft.candidates;
       selectedId.value = draft.selectedCandidateId || draft.candidates[0]?.id || '';
@@ -335,6 +352,7 @@ async function startBackgroundRewrite(append: boolean) {
     const response = await aiClient.startRewriteJob({
       postId: post.value.id,
       rewritePromptId: selectedPromptId.value,
+      rewriteMode: selectedRewriteMode.value,
       candidateCount: append ? 1 : config.candidateCount,
       append,
     });
@@ -342,6 +360,7 @@ async function startBackgroundRewrite(append: boolean) {
     rewriteJob.value = buildRewriteJobRunning({
       requestId: response.requestId,
       style: selectedPromptId.value,
+      rewriteMode: selectedRewriteMode.value,
       startedAt: new Date(startedAtMs).toISOString(),
     });
     message.info('AI 已在后台开始生成，离开页面后也可以回来查看结果。');
@@ -408,6 +427,7 @@ async function useSelected() {
     const draft = toCloneable(buildSelectedRewriteDraft({
       candidate,
       style: selectedPromptId.value,
+      rewriteMode: selectedRewriteMode.value,
       generatedAt: new Date(now).toISOString(),
     }));
     await db.posts.update(post.value.id, {
@@ -421,6 +441,7 @@ async function useSelected() {
           selectedCandidateId: candidate.id,
           style: candidate.style,
           rewritePromptId: selectedPromptId.value,
+          rewriteMode: selectedRewriteMode.value,
           modelGeneratedAt: new Date(now).toISOString(),
         },
         aiRewriteDraft: draft,

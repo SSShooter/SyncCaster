@@ -150,6 +150,46 @@ describe('generateRewriteCandidates', () => {
     expect(JSON.stringify(body.messages)).toContain('Humanize level: strong');
   });
 
+  it('passes the requested rewrite mode to the provider prompt', async () => {
+    let body: any;
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: '{"candidates":[{"title":"Candidate","bodyMd":"Body","style":"balanced"}]}',
+              },
+            },
+          ],
+        }),
+      });
+    });
+
+    await generateRewriteCandidates(
+      {
+        provider: {
+          baseUrl: 'https://api.openai.com',
+          apiKey: 'sk-local',
+          model: 'gpt-4o-mini',
+          temperature: 0.4,
+        },
+        source: {
+          postId: 'post-1',
+          title: 'Original',
+          bodyMd: 'Original body',
+        },
+        rewriteMode: 'case_study',
+        candidateCount: 1,
+      },
+      fetchImpl as any
+    );
+
+    expect(JSON.stringify(body.messages)).toContain('Creation mode: case_study');
+  });
+
   it('rejects candidates that are much shorter than the original article', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,

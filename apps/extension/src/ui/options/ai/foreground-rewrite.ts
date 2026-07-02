@@ -4,6 +4,7 @@ import {
   type AiHumanizeLevel,
   type AiProviderConfig,
   type AiRewriteCandidate,
+  type AiRewriteMode,
   type AiRewritePromptTemplate,
   type AiRewriteSource,
   type AiSegmentProgressHandler,
@@ -15,6 +16,7 @@ export interface ForegroundRewriteConfig {
   temperature: number;
   timeoutMs?: number;
   candidateCount: 1 | 2 | 3;
+  rewriteMode?: AiRewriteMode;
   humanizeLevel?: AiHumanizeLevel;
   rewritePrompts?: AiRewritePromptTemplate[];
   defaultRewritePromptId?: string;
@@ -72,6 +74,7 @@ export interface GenerateOneCandidateInput {
   provider: AiProviderConfig;
   source: AiRewriteSource;
   rewritePrompt: AiRewritePromptTemplate | undefined;
+  rewriteMode?: AiRewriteMode;
   humanizeLevel?: AiHumanizeLevel;
   candidateIndex: number;
   signal?: AbortSignal;
@@ -130,6 +133,7 @@ async function defaultGenerateOneCandidate(input: GenerateOneCandidateInput) {
     provider: input.provider,
     source: input.source,
     rewritePrompt: input.rewritePrompt,
+    rewriteMode: input.rewriteMode,
     humanizeLevel: input.humanizeLevel,
     candidateCount: 1,
     signal: input.signal,
@@ -187,6 +191,7 @@ export async function runForegroundRewriteCandidates(input: RunForegroundRewrite
         provider,
         source: input.source,
         rewritePrompt,
+        rewriteMode: input.config.rewriteMode,
         humanizeLevel,
         candidateIndex: index,
         signal: input.signal,

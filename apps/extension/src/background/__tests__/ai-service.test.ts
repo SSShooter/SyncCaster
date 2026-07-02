@@ -70,6 +70,7 @@ describe('ai-service settings storage', () => {
   it('returns defaults when no config is stored', async () => {
     const loaded = await loadAiRewriteSettings(createDeps());
     expect(DEFAULT_AI_REWRITE_CONFIG.humanizeLevel).toBe('standard');
+    expect(DEFAULT_AI_REWRITE_CONFIG.rewriteMode).toBe('reference_rebuild');
     expect(loaded.config).toMatchObject({ ...DEFAULT_AI_REWRITE_CONFIG, hasApiKey: false });
     expect(loaded.config.rewritePrompts[0]).toMatchObject({ id: 'general', name: '通用改写' });
   });
@@ -139,6 +140,41 @@ describe('ai-service settings storage', () => {
     const loaded = await loadAiRewriteSettings(deps);
 
     expect(loaded.config.humanizeLevel).toBe('strong');
+  });
+
+  it('persists the selected rewrite mode', async () => {
+    const deps = createDeps();
+
+    await saveAiRewriteSettings(
+      {
+        enabled: true,
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        temperature: 0.4,
+        candidateCount: 1,
+        rewriteMode: 'case_study',
+      },
+      deps
+    );
+
+    const loaded = await loadAiRewriteSettings(deps);
+
+    expect(loaded.config.rewriteMode).toBe('case_study');
+  });
+
+  it('normalizes unknown rewrite modes to reference rebuild', async () => {
+    const deps = createDeps();
+
+    await saveAiRewriteSettings(
+      {
+        rewriteMode: 'multi_source',
+      },
+      deps
+    );
+
+    const loaded = await loadAiRewriteSettings(deps);
+
+    expect(loaded.config.rewriteMode).toBe('reference_rebuild');
   });
 
   it('normalizes unknown humanize levels to standard', async () => {
@@ -217,6 +253,9 @@ describe('ai rewrite background jobs', () => {
     }, deps);
 
     expect(result.candidates).toHaveLength(1);
+    expect(deps.generateRewriteCandidates).toHaveBeenCalledWith(expect.objectContaining({
+      rewriteMode: 'reference_rebuild',
+    }));
     const post = deps.postsTable.rows.get('post-1');
     expect(post.meta.aiRewriteDraft.candidates).toEqual([
       { id: 'candidate-1', title: 'New title', bodyMd: 'New body', style: 'balanced' },

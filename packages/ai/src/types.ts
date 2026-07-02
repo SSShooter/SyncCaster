@@ -1,4 +1,5 @@
 export type AiRewriteStyle = 'balanced' | 'less_ai' | 'platform_ready';
+export type AiRewriteMode = 'reference_rebuild' | 'faithful_rewrite' | 'case_study';
 export type AiHumanizeLevel = 'light' | 'standard' | 'strong';
 export type AiStreamChunkHandler = (content: string) => void;
 export type AiStreamFallbackHandler = (message: string) => void;
@@ -33,6 +34,7 @@ export interface AiRewriteSource {
 export interface AiRewritePromptInput {
   source: AiRewriteSource;
   style?: AiRewriteStyle;
+  rewriteMode?: AiRewriteMode;
   rewritePrompt?: AiRewritePromptTemplate;
   humanizeLevel?: AiHumanizeLevel;
   segment?: {
