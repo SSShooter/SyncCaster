@@ -33,7 +33,10 @@
 
       <n-card>
         <div class="generation-toolbar">
-          <n-select v-model:value="selectedRewriteMode" :options="rewriteModeSelectOptions" style="width: 180px" />
+          <div class="rewrite-mode-readonly" :class="isDark ? 'text-gray-300' : 'text-gray-600'">
+            <span>创作模式</span>
+            <n-tag size="small">{{ selectedRewriteModeLabel }}</n-tag>
+          </div>
           <n-select v-model:value="selectedPromptId" :options="rewritePromptOptions" style="width: 220px" />
           <n-button type="primary" :loading="generating" @click="generate">
             {{ candidates.length > 0 ? '重新生成' : '生成文案' }}
@@ -136,7 +139,6 @@ import {
   getDefaultRewriteMode,
   getRewriteModeOption,
   normalizeUiRewriteMode,
-  rewriteModeOptions,
 } from '../ai/rewrite-mode';
 
 const props = defineProps<{ isDark?: boolean }>();
@@ -180,13 +182,9 @@ const rewritePromptOptions = computed(() => rewritePrompts.value.map((item) => (
   label: item.name || '未命名模板',
   value: item.id,
 })));
-const rewriteModeSelectOptions = computed(() => rewriteModeOptions.map((item) => ({
-  label: item.label,
-  value: item.value,
-})));
+const selectedRewriteModeLabel = computed(() => getRewriteModeOption(selectedRewriteMode.value).label);
 const generationModeText = computed(() => {
-  const modeLabel = getRewriteModeOption(selectedRewriteMode.value).label;
-  return `创作模式：${modeLabel} / 后台生成 / 单次最多等待 ${Math.round(activeTimeoutMs.value / 1000)} 秒，可离开页面后再回来查看结果`;
+  return `创作模式：${selectedRewriteModeLabel.value} / 后台生成 / 单次最多等待 ${Math.round(activeTimeoutMs.value / 1000)} 秒，可离开页面后再回来查看结果`;
 });
 const generationProgressText = computed(() => {
   if (generating.value && requestedCount.value > 0) {
@@ -294,7 +292,7 @@ async function loadPost() {
     selectedPromptId.value = rewritePrompts.value.some((item) => item.id === storedPromptId)
       ? storedPromptId
       : rewritePrompts.value[0].id;
-    selectedRewriteMode.value = normalizeUiRewriteMode(draft?.rewriteMode || configResponse.config.rewriteMode);
+    selectedRewriteMode.value = normalizeUiRewriteMode(configResponse.config.rewriteMode);
     if (draft) {
       candidates.value = draft.candidates;
       selectedId.value = draft.selectedCandidateId || draft.candidates[0]?.id || '';
@@ -341,6 +339,7 @@ async function startBackgroundRewrite(append: boolean) {
     setLocalGenerationStage('loading_config');
     const configResponse = await aiClient.getConfig();
     const config = configResponse.config;
+    selectedRewriteMode.value = normalizeUiRewriteMode(config.rewriteMode);
     activeTimeoutMs.value = getConfiguredTimeoutMs(config);
     setLocalGenerationStage('checking_permission');
     const granted = await requestAiHostPermission(config.baseUrl);
@@ -513,6 +512,15 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.rewrite-mode-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .status-strip {
