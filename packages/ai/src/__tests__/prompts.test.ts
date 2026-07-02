@@ -32,6 +32,10 @@ describe('buildRewriteMessages', () => {
     expect(messages[1].content).toContain('The rewrite prompt controls style and structure only');
     expect(messages[1].content).toContain('Do not add new frameworks, tools, code examples, configuration snippets');
     expect(messages[1].content).toContain('Preserve uncertainty and scope qualifiers');
+    expect(messages[0].content).toContain('Do not preserve the source article heading order');
+    expect(messages[0].content).not.toContain('Markdown structure');
+    expect(messages[1].content).toContain('single online article as reference material');
+    expect(messages[1].content).toContain('Avoid copying any non-technical phrase longer than 20 Chinese characters');
   });
 
   it('can request a single candidate', () => {
