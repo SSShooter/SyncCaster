@@ -126,8 +126,8 @@
                 @click="navigate(item.path)"
               >
                 <div class="flex items-center gap-2">
-                  <span class="text-base transition-transform group-hover:scale-110">{{ item.icon }}</span>
-                  <span class="text-sm font-medium">{{ item.label }}</span>
+                  <span class="nav-icon text-base transition-transform group-hover:scale-110">{{ item.icon }}</span>
+                  <span class="text-sm font-medium leading-5">{{ item.label }}</span>
                 </div>
                 <div 
                   v-if="currentPath === item.path"
@@ -196,6 +196,9 @@ import PostsView from './views/Posts.vue';
 import AccountsView from './views/Accounts.vue';
 import TasksView from './views/Tasks.vue';
 import EditorView from './views/Editor.vue';
+import AiSettingsView from './views/AiSettings.vue';
+import AiRewriteView from './views/AiRewrite.vue';
+import { resolveOptionsRoute } from './options-route';
 
 const isDark = ref(false);
 const theme = computed(() => isDark.value ? darkTheme : null);
@@ -240,6 +243,7 @@ const navItems = [
   { path: 'posts', label: '文章管理', icon: '📝' },
   { path: 'accounts', label: '账号管理', icon: '👤' },
   { path: 'tasks', label: '任务中心', icon: '⚙️' },
+  { path: 'ai-settings', label: 'AI 设置', icon: '🤖' },
 ];
 
 // 导出选项
@@ -267,6 +271,8 @@ const components: Record<string, any> = {
   posts: PostsView,
   accounts: AccountsView,
   tasks: TasksView,
+  'ai-settings': AiSettingsView,
+  'ai-rewrite': AiRewriteView,
   editor: EditorView,
 };
 
@@ -348,21 +354,26 @@ function navigate(path: string) {
 
 function updateRouteFromHash() {
   const raw = window.location.hash.slice(1);
-  const hash = raw.startsWith('/') ? raw.slice(1) : raw;
-  if (!hash) {
+  const route = resolveOptionsRoute(raw);
+  if (!raw) {
     navigate('dashboard');
     return;
   }
-  // 支持 editor/<id>
-  if (hash.startsWith('editor/')) {
-    currentPath.value = 'editor';
-    currentComponent.value = EditorView;
+  if (route.view === 'ai-rewrite') {
+    currentPath.value = route.navPath;
+    currentComponent.value = components[route.view];
     return;
   }
-  if (components[hash]) {
+  // 支持 editor/<id>
+  if (route.view === 'editor') {
+    currentPath.value = route.navPath;
+    currentComponent.value = components[route.view];
+    return;
+  }
+  if (components[route.view]) {
     // 触发自定义事件，允许 Editor 等组件拦截导航
     const event = new CustomEvent('beforenavigate', { 
-      detail: { targetPath: hash }, 
+      detail: { targetPath: route.view },
       cancelable: true 
     });
     const cancelled = !window.dispatchEvent(event);
@@ -370,8 +381,8 @@ function updateRouteFromHash() {
       // 导航被拦截，恢复 hash
       return;
     }
-    currentPath.value = hash;
-    currentComponent.value = components[hash];
+    currentPath.value = route.navPath;
+    currentComponent.value = components[route.view];
     return;
   }
   // 默认
@@ -768,6 +779,16 @@ async function exportAsPng(title: string) {
 .bg-clip-text {
   -webkit-background-clip: text;
   background-clip: text;
+}
+
+.nav-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 /* 全局禁用文本选择（默认） */

@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@synccaster/core': resolve(__dirname, './packages/core/src'),
+      '@synccaster/ai': resolve(__dirname, './packages/ai/src'),
       '@synccaster/adapters': resolve(__dirname, './packages/adapters/src'),
       '@synccaster/agent-protocol': resolve(__dirname, './packages/agent-protocol/src'),
       '@synccaster/utils': resolve(__dirname, './packages/utils/src'),

@@ -17,6 +17,7 @@
     "baseUrl": ".",
     "paths": {
       "@synccaster/core": ["./packages/core/src"],
+      "@synccaster/ai": ["./packages/ai/src"],
       "@synccaster/adapters": ["./packages/adapters/src"],
       "@synccaster/agent-protocol": ["./packages/agent-protocol/src"],
       "@synccaster/editor": ["./packages/editor/src"],

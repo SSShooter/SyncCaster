@@ -26,6 +26,7 @@ npm-debug.log*
 .copilot
 .aider*
 .continue
+.superpowers/
 CLAUDE.md
 
 # OS

@@ -17,6 +17,8 @@ import {
   startJob as startManagedJob,
 } from './job-service';
 import { initNativeAgentBridge } from './native-agent-bridge';
+import { handleAiMessage, isAiMessageType } from './ai-service';
+import { sanitizeMessageForLog } from './message-log';
 
 const logger = new Logger('background');
 
@@ -54,7 +56,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 // 监听来自 popup/options/content-script 的消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  logger.debug('message', `Received message: ${message.type}`, { message, sender });
+  logger.debug('message', `Received message: ${message.type}`, { message: sanitizeMessageForLog(message), sender });
   
   handleMessage(message, sender)
     .then(sendResponse)
@@ -224,6 +226,10 @@ async function saveCollectedPost(data: any) {
  * 处理消息
  */
 async function handleMessage(message: any, sender: chrome.runtime.MessageSender) {
+  if (isAiMessageType(message.type)) {
+    return await handleAiMessage(message);
+  }
+
   switch (message.type) {
     case 'CREATE_JOB':
       return await createManagedJob(message.data);
